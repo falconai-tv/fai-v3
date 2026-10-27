@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+downloads/
+books/
+*.mp4
+*.mp3
+*.pdf
+*.exe
+.env
+core/library_index.pkl

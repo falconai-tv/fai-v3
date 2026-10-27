@@ -1,0 +1,17 @@
+Flask
+flask-cors
+gunicorn
+numpy
+opencv-python-headless
+pytesseract
+requests
+gTTS
+yt-dlp
+scikit-learn
+beautifulsoup4
+python-dotenv
+scipy
+pandas
+ytmusicapi
+pypdf
+sentence-transformers

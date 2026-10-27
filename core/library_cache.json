@@ -1,0 +1,7 @@
+{
+    "python": "Python is a high-level, interpreted programming language known for its clear syntax, readability, and vast ecosystem.",
+    "clean code": "Clean code focuses on simplicity, readability, and maintainability, ensuring that functions are small and focused.",
+    "java": "Java is a class-based, object-oriented programming language designed for platform independence.",
+    "architecture": "Software architecture provides the high-level structural blueprint of a system to ensure scalability and robustness.",
+    "distributed system": "A distributed system consists of multiple autonomous computers that communicate over a network and coordinate their actions by passing messages, facing challenges like network latency, partition tolerance, and concurrency."
+}
