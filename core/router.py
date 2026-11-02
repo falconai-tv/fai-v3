@@ -1,6 +1,5 @@
 import os
 
-
 class Router:
     def __init__(self, conversation_engine=None, web_engine=None, library_engine=None, music_engine=None, weather_engine=None, sports_engine=None, **kwargs):
         self.conversation_engine = conversation_engine
@@ -19,15 +18,6 @@ class Router:
             }
 
         cleaned = text.strip().lower()
-
-        if self.conversation_engine and hasattr(self.conversation_engine, "handle"):
-            try:
-                user_id = kwargs.get("user_id", "default_user")
-                chat_result = self.conversation_engine.handle(user_id, text)
-                if isinstance(chat_result, dict):
-                    return chat_result
-            except Exception:
-                pass
 
         if cleaned in ["hello", "hi", "hey", "përshëndetje", "ckemi"]:
             response_text = "Hello! I am FalconAI, your advanced AI assistant. How can I help you today?"
@@ -66,6 +56,25 @@ class Router:
                         return music_result
                 except Exception:
                     pass
+
+        news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa"]
+        if intent or any(trig in cleaned for trig in news_triggers):
+            if self.web_engine and hasattr(self.web_engine, "process"):
+                try:
+                    result = self.web_engine.process(text, intent=intent or "general_search")
+                    if isinstance(result, dict) and result.get("text"):
+                        return result
+                except Exception:
+                    pass
+
+        if self.conversation_engine and hasattr(self.conversation_engine, "handle"):
+            try:
+                user_id = kwargs.get("user_id", "default_user")
+                chat_result = self.conversation_engine.handle(user_id, text)
+                if isinstance(chat_result, dict):
+                    return chat_result
+            except Exception:
+                pass
 
         try:
             if self.web_engine and hasattr(self.web_engine, "process"):
