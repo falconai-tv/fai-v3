@@ -18,40 +18,91 @@ class WebEngine:
         self.feeds = {
             "world": [
                 "https://feeds.bbci.co.uk/news/world/rss.xml",
-                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+                "http://rss.cnn.com/rss/edition_world.rss",
+                "https://www.aljazeera.com/xml/rss/all.rss",
+                "https://www.theguardian.com/world/rss"
+            ],
+            "europe": [
+                "https://www.euronews.com/rss?format=mrss",
+                "https://www.france24.com/en/rss",
+                "https://www.dw.com/en/top-stories/s-9097/rss",
+                "https://www.ansa.it/sito/ansait_rss.xml",
+                "https://elpais.com/rss/elpais/inenglish.xml"
+            ],
+            "asia": [
+                "https://www.japantimes.co.jp/feed/",
+                "https://www.channelnewsasia.com/api/v1/rss-outlets/cna-en",
+                "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+                "https://www.scmp.com/rss/2/feed",
+                "https://www.koreatimes.co.kr/www/rss/rss.xml"
+            ],
+            "americas": [
+                "https://www.cbc.ca/cnews/rss/topstories.rss",
+                "https://rss.usatoday.com/newsheadlines",
+                "https://www.buenosairestimes.com/rss",
+                "https://braziljournal.com/feed/",
+                "https://www.eluniversal.com.mx/rss.xml"
+            ],
+            "africa": [
+                "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
+                "https://www.news24.com/news24/rss",
+                "https://www.theeastafrican.co.ke/tea/rss",
+                "https://apanews.net/en/rss"
+            ],
+            "oceania": [
+                "https://www.abc.net.au/news/feed/51120/rss.xml",
+                "https://www.rnz.co.nz/rss/national.rss",
+                "https://www.smh.com.au/rss/feed.xml"
             ],
             "politics": [
                 "https://feeds.bbci.co.uk/news/politics/rss.xml",
-                "https://rss.politico.com/politics-news.xml"
+                "https://rss.politico.com/politics-news.xml",
+                "https://www.theguardian.com/politics/rss",
+                "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"
             ],
             "business": [
                 "https://feeds.bbci.co.uk/news/business/rss.xml",
                 "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
-                "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines"
+                "https://www.cnbc.com/id/10001147/device/rss/rss.html",
+                "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml"
             ],
             "technology": [
                 "https://feeds.bbci.co.uk/news/technology/rss.xml",
                 "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
                 "https://feeds.feedburner.com/TechCrunch",
-                "https://www.theverge.com/rss/index.xml"
+                "https://www.theverge.com/rss/index.xml",
+                "https://www.wired.com/feed/rss"
             ],
             "war": [
                 "https://feeds.bbci.co.uk/news/world/rss.xml",
-                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+                "https://www.aljazeera.com/xml/rss/all.rss",
+                "https://www.theguardian.com/world/rss"
             ],
             "balkan": [
                 "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
                 "https://www.trtworld.com/rss",
-                "https://exit.al/feed/"
+                "https://exit.al/feed/",
+                "https://www.koha.net/rss",
+                "https://top-channel.tv/feed/",
+                "https://www.balkaninsight.com/feed/"
             ],
             "sports": [
-                "https://feeds.bbci.co.uk/sport/rss.xml"
+                "https://feeds.bbci.co.uk/sport/rss.xml",
+                "https://www.skysports.com/rss/12040",
+                "https://www.theguardian.com/sport/rss"
             ],
             "health": [
-                "https://feeds.bbci.co.uk/news/health/rss.xml"
+                "https://feeds.bbci.co.uk/news/health/rss.xml",
+                "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml",
+                "https://www.theguardian.com/society/health/rss"
             ],
             "general": [
-                "https://feeds.bbci.co.uk/news/rss.xml"
+                "https://feeds.bbci.co.uk/news/rss.xml",
+                "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+                "http://rss.cnn.com/rss/edition.rss",
+                "https://www.theguardian.com/international/rss"
             ]
         }
 
