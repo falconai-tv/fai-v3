@@ -282,7 +282,10 @@ def process_request():
 
         logger.info(f"User Input [{user_id}]: {user_text}")
 
-        if conversation_engine is not None:
+        news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
+        is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
+
+        if not is_news_or_web and conversation_engine is not None:
             chat_result = conversation_engine.handle(user_id, user_text)
             if chat_result is not None:
                 chat_result['status'] = 'success'
