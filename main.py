@@ -341,8 +341,10 @@ def process_request():
         os.makedirs(downloads_dir, exist_ok=True)
         existing_files = set(os.listdir(downloads_dir))
 
-        response_data = agent.handle_request(user_text, user_id)
-        route_name = response_data.get("type", "unknown")
+        # Përdorim Router-in për të drejtuar kërkesën te WebEngine, MusicEngine, etj.
+        intent = data.get("intent")
+        response_data = router.route(user_text, intent=intent, user_id=user_id)
+        route_name = response_data.get("meta", {}).get("type", response_data.get("type", "unknown"))
 
         if route_name == "video_stream":
             final_response = response_data
@@ -350,41 +352,8 @@ def process_request():
                 final_response['status'] = 'success'
             return jsonify(final_response), 200
 
-        execution_result = executor.execute_action(route_name, response_data)
+        execution_result = executor.execute_action(route_name, response_data) if executor else {'response': response_data}
         final_response = execution_result.get('response', response_data)
-
-        if route_name == "music" or response_data.get("intent") == "play_music":
-            if not isinstance(final_response, dict):
-                final_response = {"text": str(final_response)}
-
-            if "data" not in final_response:
-                final_response["data"] = {}
-
-            found_file = None
-            for _ in range(35):
-                time.sleep(0.2)
-                current_files = set(os.listdir(downloads_dir))
-                new_files = current_files - existing_files
-                mp3_new = [f for f in new_files if f.endswith(".mp3")]
-
-                if mp3_new:
-                    found_file = mp3_new[0]
-                    break
-                else:
-                    all_mp3 = [f for f in current_files if f.endswith(".mp3")]
-                    if all_mp3:
-                        latest_file = max([os.path.join(downloads_dir, f) for f in all_mp3], key=os.path.getctime)
-                        if (time.time() - os.path.getctime(latest_file)) < 10:
-                            if os.path.getsize(latest_file) > 50000:
-                                found_file = os.path.basename(latest_file)
-                                break
-
-            if found_file:
-                host_url = request.host_url.rstrip('/')
-                final_response["data"]["stream_url"] = f"{host_url}/downloads/{found_file}"
-                final_response["data"]["filename"] = found_file
-            else:
-                final_response["data"]["stream_url"] = ""
 
         if isinstance(final_response, dict) and 'status' not in final_response:
             final_response['status'] = 'success'
@@ -445,16 +414,15 @@ def run_cli():
                     except Exception as w_err:
                         print(f"[Weather Error]: {w_err}")
 
-            if agent and executor:
+            if router and executor:
                 downloads_dir = os.path.join(BASE_DIR, "downloads")
                 os.makedirs(downloads_dir, exist_ok=True)
                 existing_files = set(os.listdir(downloads_dir))
 
-                response_data = agent.handle_request(user_input, "cli_user")
-                route_name = response_data.get("type", "unknown")
+                response_data = router.route(user_input, user_id="cli_user")
+                route_name = response_data.get("meta", {}).get("type", response_data.get("type", "unknown"))
 
-                execution_result = executor.execute_action(route_name, response_data)
-
+                execution_result = executor.execute_action(route_name, response_data) if executor else {'response': response_data}
                 final_res = execution_result.get('response', response_data)
 
                 if isinstance(final_res, dict):
@@ -463,27 +431,7 @@ def run_cli():
                     output_msg = str(final_res)
 
                 print(f"[Response]: {output_msg}")
-
-                if route_name == "music" or response_data.get("intent") == "play_music":
-                    def watch_download_and_print():
-                        for _ in range(30):
-                            time.sleep(0.5)
-                            current_files = set(os.listdir(downloads_dir))
-                            new_files = current_files - existing_files
-                            mp3_new = [f for f in new_files if f.endswith(".mp3")]
-                            if mp3_new:
-                                print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{mp3_new[0]}\n")
-                                break
-                            elif len(current_files) > len(existing_files):
-                                all_mp3 = [os.path.join(downloads_dir, f) for f in current_files if f.endswith(".mp3")]
-                                if all_mp3:
-                                    latest_file = max(all_mp3, key=os.path.getctime)
-                                    print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{os.path.basename(latest_file)}\n")
-                                    break
-
-                    threading.Thread(target=watch_download_and_print, daemon=True).start()
-                else:
-                    print()
+                print()
             else:
                 print("[Error]: Systems are not fully loaded.")
         except KeyboardInterrupt:
