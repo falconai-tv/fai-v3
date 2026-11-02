@@ -150,13 +150,36 @@ class WebEngine:
 
     def run_news_engine(self, query, intent=None, category=None):
         if category is None:
-            category = self.intent_category.get(intent, "general")
+            if intent and intent in self.intent_category:
+                category = self.intent_category[intent]
+            else:
+                q_lower = query.lower()
+                if any(w in q_lower for w in ["war", "conflict", "middle east", "gaza", "ukraine", "israel", "fight"]):
+                    category = "war"
+                elif any(w in q_lower for w in ["balkan", "kosova", "albania", "prishtine", "tirane", "serbia"]):
+                    category = "balkan"
+                elif any(w in q_lower for w in ["tech", "ai", "software", "apple", "google", "phone", "code"]):
+                    category = "technology"
+                elif any(w in q_lower for w in ["sport", "football", "match", "cup", "score", "game"]):
+                    category = "sports"
+                elif any(w in q_lower for w in ["business", "stock", "market", "economy", "money", "crypto"]):
+                    category = "business"
+                elif any(w in q_lower for w in ["politics", "government", "election", "president", "parliament"]):
+                    category = "politics"
+                else:
+                    category = "general"
 
-        logger.info(f"[WEB NEWS] Category: {category}")
+        logger.info(f"[WEB NEWS] Category resolved: {category} for query: '{query}'")
 
         keywords = self.extract_keywords(query)
         articles = self.fetch_articles(category)
         filtered = self.filter_articles(articles, keywords)
+
+        if not filtered:
+            if category != "general":
+                logger.info("[WEB NEWS] No articles in specific category, falling back to 'general' feeds.")
+                general_articles = self.fetch_articles("general")
+                filtered = self.filter_articles(general_articles, keywords)
 
         if not filtered:
             return self.fallback_response(query)
