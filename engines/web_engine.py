@@ -135,12 +135,6 @@ class WebEngine:
         return self.process(text, intent, category)
 
     def handle_movie_intent(self, query):
-        """
-        FalconAI V3: routes movie requests through SemanticMovieEngine, which
-        understands abstract/vibe-based queries ("a film where the tragedy is
-        internal, not physical") instead of just stripping keywords and
-        redirecting blindly to a Tubi search URL.
-        """
         try:
             result = self.semantic_movie_engine.search(query, top_k=5)
             results = result.get("results", [])
@@ -152,11 +146,6 @@ class WebEngine:
             top_match = results[0]
             alternatives = results[1:]
 
-            logger.info(
-                f"[VOD] '{query}' -> concrete terms: {result.get('concrete_terms_used')} "
-                f"-> top match: {top_match['title']} (score={top_match['match_score']})"
-            )
-
             return {
                 "type": "web_movie",
                 "data": {
@@ -166,28 +155,19 @@ class WebEngine:
                     "stream_url": top_match["url"],
                     "auto_play": True,
                     "alternatives": alternatives,
-                    "falcon_ai": f"Opening {top_match['title']} on {top_match['platform']}. Sit back and enjoy!"
+                    "falcon_ai": f"Opening {top_match['title']} on {top_match['platform']}."
                 }
             }
-
         except Exception as e:
             logger.error(f"[VOD ERROR] SemanticMovieEngine failed: {e}")
             return self.fallback_movie_response(query)
 
     def fallback_movie_response(self, query):
-        """
-        Used only if SemanticMovieEngine finds nothing or crashes (e.g.
-        Tubi is unreachable) — falls back to a plain keyword-stripped Tubi
-        search link, same behavior as the old pre-V3 logic, so the user
-        always gets SOMETHING rather than a dead end.
-        """
         movie_name = re.sub(
             r'\b(play|watch|shiko|movie|film|search|find|me gjej)\b',
             '', query, flags=re.I
         ).strip()
-
         search_url = f"https://tubitv.com/search/{movie_name.replace(' ', '%20')}"
-
         return {
             "type": "web_movie",
             "data": {
@@ -195,7 +175,7 @@ class WebEngine:
                 "platform": "tubi",
                 "stream_url": search_url,
                 "auto_play": False,
-                "falcon_ai": f"I couldn't find a great semantic match, but here's a search for '{movie_name}' on Tubi."
+                "falcon_ai": f"Search for '{movie_name}' on Tubi."
             }
         }
 
@@ -207,6 +187,16 @@ class WebEngine:
                 q_lower = query.lower()
                 if any(w in q_lower for w in ["war", "conflict", "middle east", "gaza", "ukraine", "israel", "fight"]):
                     category = "war"
+                elif any(w in q_lower for w in ["europe", "germany", "france", "uk", "italy", "spain", "eu"]):
+                    category = "europe"
+                elif any(w in q_lower for w in ["asia", "china", "japan", "india", "korea", "singapore"]):
+                    category = "asia"
+                elif any(w in q_lower for w in ["america", "usa", "canada", "brazil", "mexico", "argentina"]):
+                    category = "americas"
+                elif any(w in q_lower for w in ["africa", "kenya", "south africa"]):
+                    category = "africa"
+                elif any(w in q_lower for w in ["australia", "zealand", "oceania"]):
+                    category = "oceania"
                 elif any(w in q_lower for w in ["balkan", "kosova", "albania", "prishtine", "tirane", "serbia"]):
                     category = "balkan"
                 elif any(w in q_lower for w in ["tech", "ai", "software", "apple", "google", "phone", "code"]):
@@ -218,19 +208,24 @@ class WebEngine:
                 elif any(w in q_lower for w in ["politics", "government", "election", "president", "parliament"]):
                     category = "politics"
                 else:
-                    category = "general"
+                    category = "world"
 
         logger.info(f"[WEB NEWS] Category resolved: {category} for query: '{query}'")
 
-        keywords = self.extract_keywords(query)
         articles = self.fetch_articles(category)
+        keywords = self.extract_keywords(query)
         filtered = self.filter_articles(articles, keywords)
 
-        if not filtered:
-            if category != "general":
-                logger.info("[WEB NEWS] No articles in specific category, falling back to 'general' feeds.")
-                general_articles = self.fetch_articles("general")
-                filtered = self.filter_articles(general_articles, keywords)
+        # FLEKSIBILITET: Nëse filtrimi del bosh, mos kthe gabim, por merr artikujt e parë direkt nga RSS
+        if not filtered and articles:
+            logger.info("[WEB NEWS] Filter returned nothing, using latest raw articles as fallback.")
+            filtered = articles[:3]
+
+        if not filtered and category != "general":
+            logger.info("[WEB NEWS] Falling back to 'general' or 'world' feeds.")
+            fallback_articles = self.fetch_articles("general") or self.fetch_articles("world")
+            if fallback_articles:
+                filtered = fallback_articles[:3]
 
         if not filtered:
             return self.fallback_response(query)
@@ -239,11 +234,13 @@ class WebEngine:
 
     def fetch_articles(self, category):
         articles = []
-        feeds = self.feeds.get(category, self.feeds["general"])
+        feeds = self.feeds.get(category, self.feeds["world"])
 
         for url in feeds:
             try:
-                response = requests.get(url, timeout=self.timeout)
+                response = requests.get(url, timeout=self.timeout, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                })
                 if response.status_code != 200:
                     continue
 
@@ -256,9 +253,9 @@ class WebEngine:
 
                     if title and link:
                         articles.append({
-                            "title": title,
-                            "link": link,
-                            "description": desc
+                            "title": title.strip(),
+                            "link": link.strip(),
+                            "description": desc.strip()
                         })
 
             except Exception as e:
@@ -323,8 +320,9 @@ class WebEngine:
         for article in articles:
             text = (article["title"] + " " + article.get("description", "")).lower()
             score = sum(1 for kw in keywords if kw in text)
-            if score > 0:
-                scored.append((score, article))
+            # Pranojmë çdo artikull duke i dhënë prioritet atyre që kanë score më të lartë,
+            # kështu që nuk do të kthejmë kurrë listë bosh nëse ka artikuj në RSS.
+            scored.append((score, article))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [a[1] for a in scored]
