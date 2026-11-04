@@ -282,9 +282,19 @@ def process_request():
 
         logger.info(f"User Input [{user_id}]: {user_text}")
 
-        # Lejojmë kërkesat për lajme, web ose çdo intent specifik të kalojnë drejtpërdrejt te routeri
         news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
         is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
+
+        # Thërrasim direkt WebEngine për lajme dhe web searches
+        if is_news_or_web and web_engine is not None:
+            try:
+                web_res = web_engine.process(user_text)
+                if isinstance(web_res, dict):
+                    if 'status' not in web_res:
+                        web_res['status'] = 'success'
+                    return jsonify(web_res), 200
+            except Exception as web_err:
+                logger.error(f"[Web Engine Direct Error]: {web_err}")
 
         if not is_news_or_web and conversation_engine is not None:
             chat_result = conversation_engine.handle(user_id, user_text)
