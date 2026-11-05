@@ -89,13 +89,13 @@ class MusicEngine:
 
             if self.genius:
                 try:
-                    print(f"\n[FalconAI Genius Engine]: Duke kërkuar tekstin/frazën te Genius...")
+                    print(f"\n[FalconAI Genius Engine]: Searching lyrics/phrase on Genius...")
                     songs_search = self.genius.search_songs(search_query, per_page=1)
                     if songs_search and 'songs' in songs_search and len(songs_search['songs']) > 0:
                         top_hit = songs_search['songs'][0]
                         song_title = top_hit.get('title', search_query)
                         song_artist = top_hit.get('primary_artist', {}).get('name', '')
-                        print(f"[FalconAI Genius Engine]: U gjet -> {song_artist} - {song_title}")
+                        print(f"[FalconAI Genius Engine]: Found -> {song_artist} - {song_title}")
 
                         lyrics_text = self.genius.search_lyrics(search_query)
                 except Exception as g_err:
@@ -148,10 +148,9 @@ class MusicEngine:
 
                     if title_match and artist_match:
                         local_file_path = os.path.join(self.download_dir, file)
-                        print(f"\n[FalconAI Offline Engine]: Kënga u gjet në cache-in lokal!")
+                        print(f"\n[FalconAI Offline Engine]: Song found in local cache!")
                         filename = os.path.basename(local_file_path)
                         print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{filename}\n")
-                        self.play_audio(local_file_path)
                         return
 
             output_template = os.path.join(self.download_dir, "%(title)s.%(ext)s")
@@ -200,41 +199,66 @@ class MusicEngine:
 
                     self.embed_metadata(file_path, song_title, song_artist if song_artist else "FalconAI", image_path, lyrics_text)
 
-                    print(f"\n[FalconAI Music Engine]: Kënga u shkarkua dhe u optimizua plotësisht.")
-                    if video_url and "youtube.com/watch" in video_url:
-                        print(f"[YouTube Link]: {video_url}")
-
+                    print(f"\n[FalconAI Music Engine]: Song successfully downloaded and optimized.")
                     filename = os.path.basename(file_path)
                     print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{filename}\n")
-                    
-                    self.play_audio(file_path)
                 else:
-                    print(f"\n[MusicEngine]: Skedari u shkarkua por path-i nuk u gjet saktë.")
+                    print(f"\n[MusicEngine]: File downloaded but path could not be resolved correctly.")
             else:
                 print(f"\n[MusicEngine Error]: {stderr}")
 
         except Exception as e:
             print(f"\n[MusicEngine Exception]: {e}")
 
-    def play_audio(self, file_path: str):
-        try:
-            print(f"\n[Duke u luajtur]: {file_path}")
-            if os.name == 'nt':
-                os.startfile(file_path)
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['afplay', file_path])
-            else:
-                subprocess.Popen(['xdg-open', file_path])
-        except Exception as e:
-            print(f"[Audio Player Error]: {e}")
-
     def play(self, query: str) -> dict:
-        thread = threading.Thread(target=self.search_and_download, args=(query,))
-        thread.daemon = True
-        thread.start()
+        search_query = query.lower()
+        for trig in ["play", "këngë", "song", "music", "lësho"]:
+            search_query = search_query.replace(trig, "")
+        search_query = search_query.strip()
+        if not search_query:
+            search_query = query
+
+        song_title = search_query
+        song_artist = ""
+
+        if self.ytmusic:
+            try:
+                results = self.ytmusic.search(search_query, filter="songs")
+                if not results:
+                    results = self.ytmusic.search(search_query)
+
+                if results and len(results) > 0:
+                    top_result = results[0]
+                    song_title = top_result.get('title', song_title)
+                    artists = top_result.get('artists', [])
+                    if artists:
+                        song_artist = artists[0].get('name', '')
+            except Exception as e:
+                print(f"[YTMusic Error]: {e}")
+
+        safe_filename = "".join(c for c in f"{song_artist} - {song_title}" if c.isalnum() or c.isspace()).strip().replace(" ", "_") + ".mp3"
+        local_file_path = os.path.join(self.download_dir, safe_filename)
+        
+        # Start background download/search thread
+        if not os.path.exists(local_file_path):
+            thread = threading.Thread(target=self.search_and_download, args=(query,))
+            thread.daemon = True
+            thread.start()
+
+        stream_url = f"http://127.0.0.1:8080/downloads/{safe_filename}"
 
         return {
-            "text": f"Duke analizuar tekstin/frazën për: {query}...",
-            "voice": "Analyzing lyrics and searching music.",
+            "type": "audio",
+            "data": {
+                "query": query,
+                "title": song_title,
+                "artist": song_artist,
+                "audio_url": stream_url,
+                "stream_url": stream_url,
+                "auto_play": True,
+                "falcon_ai": f"Playing {song_title} by {song_artist}."
+            },
+            "text": f"Playing: {song_title} - {song_artist}",
+            "voice": f"Playing {song_title}.",
             "meta": {"type": "music", "intent": "play_music"}
         }
