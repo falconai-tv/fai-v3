@@ -23,6 +23,12 @@ class WebEngine:
                 "https://www.aljazeera.com/xml/rss/all.rss",
                 "https://www.theguardian.com/world/rss"
             ],
+            "usa": [
+                "https://rss.usatoday.com/newsheadlines",
+                "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",
+                "http://rss.cnn.com/rss/edition_us.rss",
+                "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml"
+            ],
             "europe": [
                 "https://www.euronews.com/rss?format=mrss",
                 "https://www.france24.com/en/rss",
@@ -39,10 +45,7 @@ class WebEngine:
             ],
             "americas": [
                 "https://www.cbc.ca/cnews/rss/topstories.rss",
-                "https://rss.usatoday.com/newsheadlines",
-                "https://www.buenosairestimes.com/rss",
-                "https://braziljournal.com/feed/",
-                "https://www.eluniversal.com.mx/rss.xml"
+                "https://www.buenosairestimes.com/rss"
             ],
             "africa": [
                 "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
@@ -191,7 +194,9 @@ class WebEngine:
                     category = "europe"
                 elif any(w in q_lower for w in ["asia", "china", "japan", "india", "korea", "singapore"]):
                     category = "asia"
-                elif any(w in q_lower for w in ["america", "usa", "canada", "brazil", "mexico", "argentina"]):
+                elif any(w in q_lower for w in ["usa", "united states", "america", "american"]):
+                    category = "usa"
+                elif any(w in q_lower for w in ["canada", "brazil", "mexico", "argentina"]):
                     category = "americas"
                 elif any(w in q_lower for w in ["africa", "kenya", "south africa"]):
                     category = "africa"
@@ -216,7 +221,6 @@ class WebEngine:
         keywords = self.extract_keywords(query)
         filtered = self.filter_articles(articles, keywords)
 
-        # FLEKSIBILITET: Nëse filtrimi del bosh, mos kthe gabim, por merr artikujt e parë direkt nga RSS
         if not filtered and articles:
             logger.info("[WEB NEWS] Filter returned nothing, using latest raw articles as fallback.")
             filtered = articles[:3]
@@ -338,8 +342,6 @@ class WebEngine:
         for article in articles:
             text = (article["title"] + " " + article.get("description", "")).lower()
             score = sum(1 for kw in keywords if kw in text)
-            # Pranojmë çdo artikull duke i dhënë prioritet atyre që kanë score më të lartë,
-            # kështu që nuk do të kthejmë kurrë listë bosh nëse ka artikuj në RSS.
             scored.append((score, article))
 
         scored.sort(key=lambda x: x[0], reverse=True)
