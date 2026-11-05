@@ -245,7 +245,7 @@ class MusicEngine:
             thread.daemon = True
             thread.start()
 
-        stream_url = f"http://127.0.0.1:8080/downloads/{safe_filename}"
+        stream_url = f"https://fai-v3-1.onrender.com/downloads/{safe_filename}"
 
         return {
             "type": "audio",
