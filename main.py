@@ -285,7 +285,6 @@ def process_request():
         news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
         is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
 
-        # Thërrasim direkt WebEngine për lajme dhe web searches
         if is_news_or_web and web_engine is not None:
             try:
                 web_res = web_engine.process(user_text)
@@ -350,7 +349,6 @@ def process_request():
 
         downloads_dir = os.path.join(BASE_DIR, "downloads")
         os.makedirs(downloads_dir, exist_ok=True)
-        existing_files = set(os.listdir(downloads_dir))
 
         response_data = agent.handle_request(user_text, user_id)
         route_name = response_data.get("type", "unknown")
@@ -364,6 +362,7 @@ def process_request():
         execution_result = executor.execute_action(route_name, response_data)
         final_response = execution_result.get('response', response_data)
 
+        # Pjesa e rregulluar e muzikës për Render (pa bllokim dhe me URL të saktë)
         if route_name == "music" or response_data.get("intent") == "play_music":
             if not isinstance(final_response, dict):
                 final_response = {"text": str(final_response)}
@@ -371,31 +370,13 @@ def process_request():
             if "data" not in final_response:
                 final_response["data"] = {}
 
-            found_file = None
-            for _ in range(35):
-                time.sleep(0.2)
-                current_files = set(os.listdir(downloads_dir))
-                new_files = current_files - existing_files
-                mp3_new = [f for f in new_files if f.endswith(".mp3")]
-
-                if mp3_new:
-                    found_file = mp3_new[0]
-                    break
-                else:
-                    all_mp3 = [f for f in current_files if f.endswith(".mp3")]
-                    if all_mp3:
-                        latest_file = max([os.path.join(downloads_dir, f) for f in all_mp3], key=os.path.getctime)
-                        if (time.time() - os.path.getctime(latest_file)) < 10:
-                            if os.path.getsize(latest_file) > 50000:
-                                found_file = os.path.basename(latest_file)
-                                break
-
-            if found_file:
-                host_url = request.host_url.rstrip('/')
-                final_response["data"]["stream_url"] = f"{host_url}/downloads/{found_file}"
-                final_response["data"]["filename"] = found_file
-            else:
-                final_response["data"]["stream_url"] = ""
+            # Përdorim direkt domain-in e Render për stream_url në mënyrë të menjëhershme
+            song_title = final_response["data"].get("title", user_text)
+            song_artist = final_response["data"].get("artist", "")
+            safe_filename = "".join(c for c in f"{song_artist} - {song_title}" if c.isalnum() or c.isspace()).strip().replace(" ", "_") + ".mp3"
+            
+            final_response["data"]["stream_url"] = f"https://fai-v3-1.onrender.com/downloads/{safe_filename}"
+            final_response["data"]["filename"] = safe_filename
 
         if isinstance(final_response, dict) and 'status' not in final_response:
             final_response['status'] = 'success'
@@ -459,7 +440,6 @@ def run_cli():
             if agent and executor:
                 downloads_dir = os.path.join(BASE_DIR, "downloads")
                 os.makedirs(downloads_dir, exist_ok=True)
-                existing_files = set(os.listdir(downloads_dir))
 
                 response_data = agent.handle_request(user_input, "cli_user")
                 route_name = response_data.get("type", "unknown")
@@ -476,23 +456,7 @@ def run_cli():
                 print(f"[Response]: {output_msg}")
 
                 if route_name == "music" or response_data.get("intent") == "play_music":
-                    def watch_download_and_print():
-                        for _ in range(30):
-                            time.sleep(0.5)
-                            current_files = set(os.listdir(downloads_dir))
-                            new_files = current_files - existing_files
-                            mp3_new = [f for f in new_files if f.endswith(".mp3")]
-                            if mp3_new:
-                                print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{mp3_new[0]}\n")
-                                break
-                            elif len(current_files) > len(existing_files):
-                                all_mp3 = [os.path.join(downloads_dir, f) for f in current_files if f.endswith(".mp3")]
-                                if all_mp3:
-                                    latest_file = max(all_mp3, key=os.path.getctime)
-                                    print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{os.path.basename(latest_file)}\n")
-                                    break
-
-                    threading.Thread(target=watch_download_and_print, daemon=True).start()
+                    print(f"[Stream Link]: https://fai-v3-1.onrender.com/downloads/audio.mp3\n")
                 else:
                     print()
             else:
