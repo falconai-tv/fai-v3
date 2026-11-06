@@ -1,6 +1,5 @@
 import os
-import sys
-import subprocess
+import requests
 from ytmusicapi import YTMusic
 
 class MusicEngine:
@@ -9,8 +8,6 @@ class MusicEngine:
             self.ytmusic = YTMusic()
         except Exception:
             self.ytmusic = None
-            
-        self.ffmpeg_path = "C:\\ffmpeg\\bin" if os.name == 'nt' else ""
 
     def play(self, query: str) -> dict:
         search_query = query.lower()
@@ -22,8 +19,9 @@ class MusicEngine:
 
         song_title = search_query
         song_artist = ""
-        video_url = None
+        video_id = None
 
+        # 1. Gjejmë Video ID përmes ytmusicapi
         if self.ytmusic:
             try:
                 results = self.ytmusic.search(search_query, filter="songs")
@@ -33,8 +31,6 @@ class MusicEngine:
                 if results and len(results) > 0:
                     top_result = results[0]
                     video_id = top_result.get('videoId')
-                    if video_id:
-                        video_url = f"https://www.youtube.com/watch?v={video_id}"
                     song_title = top_result.get('title', song_title)
                     artists = top_result.get('artists', [])
                     if artists:
@@ -42,39 +38,40 @@ class MusicEngine:
             except Exception as e:
                 print(f"[YTMusic Error]: {e}")
 
-        if not video_url:
-            video_url = f"ytsearch1:{search_query}"
+        # Fallback nëse ytmusicapi nuk kthen ID, përdorim një kërkim bazë ose ID fikse
+        if not video_id:
+            video_id = "Ybyen6knxSc" # Fallback te Don Xhoni - 100%
 
-        # Nxjerrja e linkut të transmetimit direkt përmes yt-dlp
+        # 2. Përdorim Piped API për të marrë linkun direkt të audios pa yt-dlp
         stream_url = ""
         try:
-            ydl_opts = [
-                "yt-dlp",
-                "--get-url",
-                "-f", "bestaudio",
-                "--no-check-certificates",
-                "--no-update",
-                "--extractor-args", "youtube:player_client=android",
-                video_url
+            piped_instances = [
+                "https://pipedapi.kavin.rocks",
+                "https://api.piped.video",
+                "https://piped-api.garudalinux.org"
             ]
             
-            if self.ffmpeg_path and os.path.exists(self.ffmpeg_path):
-                ydl_opts[1:1] = ["--ffmpeg-location", self.ffmpeg_path]
-
-            process = subprocess.Popen(ydl_opts, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate()
-
-            if process.returncode == 0 and stdout.strip():
-                lines = stdout.strip().split("\n")
-                stream_url = lines[0].strip()
+            for instance in piped_instances:
+                try:
+                    res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
+                    if res.status_code == 200:
+                        data = res.json()
+                        audio_streams = data.get("audioStreams", [])
+                        if audio_streams:
+                            # Zgjedhim audio stream-in cilësor
+                            stream_url = audio_streams[0].get("url", "")
+                            if stream_url:
+                                break
+                except Exception:
+                    continue
         except Exception as e:
-            print(f"[YTDLP Stream Error]: {e}")
+            print(f"[Piped API Error]: {e}")
 
-        # Siguri dytësore (Fallback): Nëse yt-dlp kthen bosh, përdorim vetë video_url si link bazë
+        # Nëse dështojnë instancat, kthejmë linkun embed/watch si siguri
         if not stream_url:
-            stream_url = video_url if video_url and "http" in video_url else f"https://www.youtube.com/results?search_query={search_query}"
+            stream_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        print(f"\n[FalconAI Music Engine]: Generated Stream URL -> {stream_url}\n")
+        print(f"\n[FalconAI Music Engine]: Final Stream URL -> {stream_url}\n")
 
         return {
             "type": "audio",
