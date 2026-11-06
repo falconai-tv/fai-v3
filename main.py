@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import threading
-import time
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -347,9 +346,6 @@ def process_request():
             except Exception as w_err:
                 logger.error(f"[Weather Error]: {w_err}")
 
-        downloads_dir = os.path.join(BASE_DIR, "downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-
         response_data = agent.handle_request(user_text, user_id)
         route_name = response_data.get("type", "unknown")
 
@@ -362,21 +358,13 @@ def process_request():
         execution_result = executor.execute_action(route_name, response_data)
         final_response = execution_result.get('response', response_data)
 
-        # Pjesa e rregulluar e muzikës për Render (pa bllokim dhe me URL të saktë)
+        # Pjesa e pastruar për muzikën: përcjell direkt atë që kthen music_engine.py pa shkarkime
         if route_name == "music" or response_data.get("intent") == "play_music":
             if not isinstance(final_response, dict):
                 final_response = {"text": str(final_response)}
 
             if "data" not in final_response:
                 final_response["data"] = {}
-
-            # Përdorim direkt domain-in e Render për stream_url në mënyrë të menjëhershme
-            song_title = final_response["data"].get("title", user_text)
-            song_artist = final_response["data"].get("artist", "")
-            safe_filename = "".join(c for c in f"{song_artist} - {song_title}" if c.isalnum() or c.isspace()).strip().replace(" ", "_") + ".mp3"
-            
-            final_response["data"]["stream_url"] = f"https://fai-v3-1.onrender.com/downloads/{safe_filename}"
-            final_response["data"]["filename"] = safe_filename
 
         if isinstance(final_response, dict) and 'status' not in final_response:
             final_response['status'] = 'success'
@@ -438,9 +426,6 @@ def run_cli():
                         print(f"[Weather Error]: {w_err}")
 
             if agent and executor:
-                downloads_dir = os.path.join(BASE_DIR, "downloads")
-                os.makedirs(downloads_dir, exist_ok=True)
-
                 response_data = agent.handle_request(user_input, "cli_user")
                 route_name = response_data.get("type", "unknown")
 
@@ -456,7 +441,8 @@ def run_cli():
                 print(f"[Response]: {output_msg}")
 
                 if route_name == "music" or response_data.get("intent") == "play_music":
-                    print(f"[Stream Link]: https://fai-v3-1.onrender.com/downloads/audio.mp3\n")
+                    stream_url = final_res.get("data", {}).get("stream_url", "") if isinstance(final_res, dict) else ""
+                    print(f"[Stream Link]: {stream_url}\n")
                 else:
                     print()
             else:
