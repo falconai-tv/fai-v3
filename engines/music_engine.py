@@ -1,5 +1,4 @@
 import os
-import yt_dlp
 from ytmusicapi import YTMusic
 
 class MusicEngine:
@@ -21,7 +20,6 @@ class MusicEngine:
         song_artist = ""
         video_id = "Ybyen6knxSc" # Default (Don Xhoni - 100%)
 
-        # 1. Gjejmë Video ID përmes ytmusicapi
         if self.ytmusic:
             try:
                 results = self.ytmusic.search(search_query, filter="songs")
@@ -40,43 +38,15 @@ class MusicEngine:
             except Exception as e:
                 print(f"[YTMusic Error]: {e}")
 
-        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-        stream_url = ""
-
-        # 2. Përdorim yt-dlp me konfigurimin e klientit Android për të marrë linkun direkt të audios
-        try:
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'socket_timeout': 10,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web']
-                    }
-                },
-                'quiet': True,
-                'no_warnings': True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(youtube_url, download=False)
-                stream_url = info.get('url', '')
-        except Exception as e:
-            print(f"[yt-dlp Error]: {e}")
-
-        # Fallback nëse yt-dlp dështon
-        if not stream_url:
-            stream_url = youtube_url
-
-        print(f"\n[FalconAI Music Engine]: Direct Stream URL -> {stream_url}\n")
-
         return {
             "type": "audio",
             "data": {
                 "query": query,
                 "title": song_title,
                 "artist": song_artist,
-                "audio_url": stream_url,
-                "stream_url": stream_url,
                 "video_id": video_id,
+                "audio_url": f"https://www.youtube.com/watch?v={video_id}",
+                "stream_url": f"https://www.youtube.com/watch?v={video_id}",
                 "auto_play": True,
                 "falcon_ai": f"Playing {song_title} by {song_artist}."
             },
