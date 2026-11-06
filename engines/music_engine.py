@@ -45,15 +45,16 @@ class MusicEngine:
         if not video_url:
             video_url = f"ytsearch1:{search_query}"
 
-        # Nxjerrja e linkut të transmetimit direkt
+        # Nxjerrja e linkut të transmetimit direkt përmes yt-dlp
         stream_url = ""
         try:
             ydl_opts = [
                 "yt-dlp",
                 "--get-url",
-                "-f", "ba[ext=m4a]/bestaudio",
-                "--extractor-args", "youtube:player_client=android",
+                "-f", "bestaudio",
+                "--no-check-certificates",
                 "--no-update",
+                "--extractor-args", "youtube:player_client=android",
                 video_url
             ]
             
@@ -69,8 +70,11 @@ class MusicEngine:
         except Exception as e:
             print(f"[YTDLP Stream Error]: {e}")
 
-        # Krijojmë një emër të sigurt për skedarin nëse kalojmë te proxy
-        safe_filename = "".join(c for c in f"{song_artist} - {song_title}" if c.isalnum() or c.isspace()).strip().replace(" ", "_") + ".mp3"
+        # Siguri dytësore (Fallback): Nëse yt-dlp kthen bosh, përdorim vetë video_url si link bazë
+        if not stream_url:
+            stream_url = video_url if video_url and "http" in video_url else f"https://www.youtube.com/results?search_query={search_query}"
+
+        print(f"\n[FalconAI Music Engine]: Generated Stream URL -> {stream_url}\n")
 
         return {
             "type": "audio",
