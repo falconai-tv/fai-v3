@@ -150,7 +150,7 @@ class MusicEngine:
                         local_file_path = os.path.join(self.download_dir, file)
                         print(f"\n[FalconAI Offline Engine]: Song found in local cache!")
                         filename = os.path.basename(local_file_path)
-                        print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{filename}\n")
+                        print(f"[Stream Link]: https://fai-v3-1.onrender.com/downloads/{filename}\n")
                         return
 
             output_template = os.path.join(self.download_dir, "%(title)s.%(ext)s")
@@ -201,7 +201,7 @@ class MusicEngine:
 
                     print(f"\n[FalconAI Music Engine]: Song successfully downloaded and optimized.")
                     filename = os.path.basename(file_path)
-                    print(f"[Stream Link]: http://127.0.0.1:8080/downloads/{filename}\n")
+                    print(f"[Stream Link]: https://fai-v3-1.onrender.com/downloads/{filename}\n")
                 else:
                     print(f"\n[MusicEngine]: File downloaded but path could not be resolved correctly.")
             else:
@@ -239,12 +239,12 @@ class MusicEngine:
         safe_filename = "".join(c for c in f"{song_artist} - {song_title}" if c.isalnum() or c.isspace()).strip().replace(" ", "_") + ".mp3"
         local_file_path = os.path.join(self.download_dir, safe_filename)
         
-        # Start background download/search thread
         if not os.path.exists(local_file_path):
             thread = threading.Thread(target=self.search_and_download, args=(query,))
             thread.daemon = True
             thread.start()
 
+        # Përdorimi ekskluziv i domain-it të Render
         stream_url = f"https://fai-v3-1.onrender.com/downloads/{safe_filename}"
 
         return {
