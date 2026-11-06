@@ -21,7 +21,6 @@ class MusicEngine:
         song_artist = ""
         video_id = None
 
-        # 1. Gjejmë Video ID përmes ytmusicapi
         if self.ytmusic:
             try:
                 results = self.ytmusic.search(search_query, filter="songs")
@@ -38,40 +37,56 @@ class MusicEngine:
             except Exception as e:
                 print(f"[YTMusic Error]: {e}")
 
-        # Fallback nëse ytmusicapi nuk kthen ID, përdorim një kërkim bazë ose ID fikse
         if not video_id:
-            video_id = "Ybyen6knxSc" # Fallback te Don Xhoni - 100%
+            video_id = "Ybyen6knxSc"
 
-        # 2. Përdorim Piped API për të marrë linkun direkt të audios pa yt-dlp
+        # Përdorim Invidious API si alternativë e parë, ose Cobalt API
         stream_url = ""
-        try:
-            piped_instances = [
-                "https://pipedapi.kavin.rocks",
-                "https://api.piped.video",
-                "https://piped-api.garudalinux.org"
-            ]
-            
-            for instance in piped_instances:
-                try:
-                    res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
-                    if res.status_code == 200:
-                        data = res.json()
-                        audio_streams = data.get("audioStreams", [])
-                        if audio_streams:
-                            # Zgjedhim audio stream-in cilësor
-                            stream_url = audio_streams[0].get("url", "")
+        youtube_watch_url = f"https://www.youtube.com/watch?v={video_id}"
+
+        invidious_instances = [
+            "https://inv.nadeko.net",
+            "https://vid.priv.au",
+            "https://invidious.privacyredirect.com"
+        ]
+
+        for instance in invidious_instances:
+            try:
+                res = requests.get(f"{instance}/api/v1/videos/{video_id}", timeout=4)
+                if res.status_code == 200:
+                    data = res.json()
+                    adaptive_formats = data.get("adaptiveFormats", [])
+                    # Kërkojmë për format audio (m4a ose webm)
+                    for fmt in adaptive_formats:
+                        if "audio" in fmt.get("type", ""):
+                            stream_url = fmt.get("url", "")
                             if stream_url:
                                 break
-                except Exception:
-                    continue
-        except Exception as e:
-            print(f"[Piped API Error]: {e}")
+                    if stream_url:
+                        break
+            except Exception:
+                continue
 
-        # Nëse dështojnë instancat, kthejmë linkun embed/watch si siguri
+        # Nëse Invidious dështon, provojmë Cobalts (API publike për media streaming)
         if not stream_url:
-            stream_url = f"https://www.youtube.com/watch?v={video_id}"
+            try:
+                cobalt_res = requests.post(
+                    "https://api.cobalt.tools/api/json",
+                    json={"url": youtube_watch_url, "audioFormat": "mp3"},
+                    headers={"Accept": "application/json", "User-Agent": "FalconAI"},
+                    timeout=5
+                )
+                if cobalt_res.status_code == 200:
+                    c_data = cobalt_res.json()
+                    stream_url = c_data.get("url", "")
+            except Exception as e:
+                print(f"[Cobalt API Error]: {e}")
 
-        print(f"\n[FalconAI Music Engine]: Final Stream URL -> {stream_url}\n")
+        # Fallback përfundimtar nëse gjithçka tjetër bllokohet
+        if not stream_url:
+            stream_url = youtube_watch_url
+
+        print(f"\n[FalconAI Music Engine]: Final Resolved Stream URL -> {stream_url}\n")
 
         return {
             "type": "audio",
