@@ -1,49 +1,49 @@
 import os
-from ytmusicapi import YTMusic
+import requests
 
 class MusicEngine:
     def __init__(self):
-        try:
-            self.ytmusic = YTMusic()
-        except Exception:
-            self.ytmusic = None
+        self.api_key = os.getenv("YOUTUBE_API_KEY", "")
 
     def play(self, query: str) -> dict:
-        # Pastrojmë tekstin nga fjalët e panevojshme
         search_query = query.lower()
-        for trig in ["play", "këngë", "song", "music", "lësho"]:
+        for trig in ["play", "këngë", "song", "music", "lësho", "lëshoj"]:
             search_query = search_query.replace(trig, "")
         search_query = search_query.strip()
         if not search_query:
             search_query = query
 
         song_title = search_query
-        song_artist = ""
-        # Linku bazë ose default i sigurt nëse kërkimi nuk kthen rezultat
-        video_id = "6-eqUIMD1JU" 
+        song_artist = "FalconAI Music"
+        video_id = "6-eqUIMD1JU"
 
-        # Përdorim ytmusicapi për të gjetur videon nga teksti i përdoruesit
-        if self.ytmusic:
-            try:
-                results = self.ytmusic.search(search_query, filter="songs")
-                if not results:
-                    results = self.ytmusic.search(search_query)
+        url = "https://www.googleapis.com/youtube/v3/search"
+        params = {
+            "part": "snippet",
+            "q": f"{search_query} official music video",
+            "type": "video",
+            "maxResults": 1,
+            "key": self.api_key
+        }
 
-                if results and len(results) > 0:
-                    top_result = results[0]
-                    vid = top_result.get('videoId')
-                    if vid:
-                        video_id = vid
-                    song_title = top_result.get('title', song_title)
-                    artists = top_result.get('artists', [])
-                    if artists:
-                        song_artist = artists.get('name', '')
-            except Exception as e:
-                print(f"[YTMusic Error]: {e}")
+        try:
+            res = requests.get(url, params=params, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                items = data.get("items", [])
+                if items:
+                    top_item = items[0]
+                    video_id = top_item["id"]["videoId"]
+                    song_title = top_item["snippet"]["title"]
+                    song_artist = top_item["snippet"]["channelTitle"]
+            else:
+                print(f"[YouTube API Warning]: Status code {res.status_code} - {res.text}")
+        except Exception as e:
+            print(f"[YouTube API Error]: {e}")
 
         target_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        print(f"\n[FalconAI Music Engine]: Query '{query}' -> URL {target_url}\n")
+        print(f"\n[FalconAI Music Engine]: Query '{query}' -> Found Video ID: {video_id} ({song_title})\n")
 
         return {
             "type": "audio",
