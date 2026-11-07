@@ -1,63 +1,66 @@
 import os
-import requests
+import yt_dlp
+from flask import Flask, request, jsonify, send_from_directory
 
-class MusicEngine:
-    def __init__(self):
-        self.api_key = os.getenv("YOUTUBE_API_KEY", "")
+app = Flask(__name__)
 
-    def play(self, query: str) -> dict:
-        search_query = query.lower()
-        for trig in ["play", "këngë", "song", "music", "lësho", "lëshoj"]:
-            search_query = search_query.replace(trig, "")
-        search_query = search_query.strip()
-        if not search_query:
-            search_query = query
+DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-        song_title = search_query
-        song_artist = "FalconAI Music"
-        video_id = "6-eqUIMD1JU"
+@app.route('/download_music', methods=['POST'])
+def download_music():
+    data = request.json
+    query = data.get('query') or data.get('search_query')
+    
+    if not query:
+        return jsonify({"error": "No search query provided"}}, 400
 
-        url = "https://www.googleapis.com/youtube/v3/search"
-        params = {
-            "part": "snippet",
-            "q": f"{search_query} official music video",
-            "type": "video",
-            "maxResults": 1,
-            "key": self.api_key
-        }
+    print(f"[FalconAI Music Engine] Kërkimi për: {query}")
 
-        try:
-            res = requests.get(url, params=params, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                items = data.get("items", [])
-                if items:
-                    top_item = items[0]
-                    video_id = top_item["id"]["videoId"]
-                    song_title = top_item["snippet"]["title"]
-                    song_artist = top_item["snippet"]["channelTitle"]
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(id)s.%(ext)s'),
+        'default_search': 'ytsearch1',
+        'quiet': True,
+        'no_warnings': True
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=True)
+
+            if 'entries' in info:
+                video_info = info['entries'][0]
             else:
-                print(f"[YouTube API Warning]: Status code {res.status_code} - {res.text}")
-        except Exception as e:
-            print(f"[YouTube API Error]: {e}")
+                video_info = info
 
-        target_url = f"https://www.youtube.com/watch?v={video_id}"
+            video_id = video_info.get('id')
+            title = video_info.get('title', 'Unknown Title')
+            filename = f"{video_id}.mp3"
+            file_path = os.path.join(DOWNLOAD_FOLDER, filename)
 
-        print(f"\n[FalconAI Music Engine]: Query '{query}' -> Found Video ID: {video_id} ({song_title})\n")
+            print(f"[FalconAI Music Engine] U sharkua me sukses: {title} -> {file_path}")
 
-        return {
-            "type": "audio",
-            "data": {
-                "query": query,
-                "title": song_title,
-                "artist": song_artist,
-                "audio_url": target_url,
-                "stream_url": target_url,
-                "video_id": video_id,
-                "auto_play": True,
-                "falcon_ai": f"Playing {song_title} by {song_artist}."
-            },
-            "text": f"Playing: {song_title} - {song_artist}",
-            "voice": f"Playing {song_title}.",
-            "meta": {"type": "music", "intent": "play_music"}
-        }
+            return jsonify({
+                "status": "success",
+                "title": title,
+                "file_name": filename,
+                "file_path": file_path,
+                "stream_url": f"http://<IP_E_SERVERIT_TEND>:5000/downloads/{filename}"
+            })
+
+    except Exception as e:
+        print(f"[FalconAI Music Engine Gabim]: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/downloads/<path:filename>', methods=['GET'])
+def serve_downloaded_file(filename):
+    return send_from_directory(DOWNLOAD_FOLDER, filename)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
