@@ -13,7 +13,7 @@ def download_music():
     query = data.get('query') or data.get('search_query')
     
     if not query:
-        return jsonify({"error": "No search query provided"}}, 400
+        return jsonify({"error": "No search query provided"}), 400
 
     print(f"[FalconAI Music Engine] Kërkimi për: {query}")
 
