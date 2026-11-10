@@ -7,6 +7,7 @@ import requests
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 
+# Fjalët që hiqen nga fillimi i komandës zanore para kërkimit
 FILLER_PATTERN = re.compile(
     r"^\s*(please\s+)?(play|put on|listen to|luaj|luaje|vendos|ndiz|ndize|dua te degjoj|dua të dëgjoj)\s+",
     re.IGNORECASE,
@@ -14,14 +15,17 @@ FILLER_PATTERN = re.compile(
 
 CACHE_TTL_SECONDS = 6 * 60 * 60  # 6 orë, kursen kuotën e API-t
 
+
 class MusicEngine:
     def __init__(self):
         self.api_key = os.environ.get("YOUTUBE_API_KEY", "")
         self._cache = {}  # {query_normalizuar: (timestamp, rezultati)}
 
+    # ---------- Pika hyrëse (e njëjta si më parë) ----------
     def process(self, query: str) -> dict:
         return self.search_music(query)
 
+    # ---------- Logjika kryesore ----------
     def search_music(self, query: str) -> dict:
         query = self._clean_query(query)
         if not query:
@@ -75,25 +79,32 @@ class MusicEngine:
             print(f"[FalconAI Music Engine Gabim]: {e}")
             return {"error": str(e)}
 
+    # ---------- Ndihmëse ----------
     @staticmethod
     def _clean_query(query: str) -> str:
         if not query:
             return ""
-        query = FILLER_PATTERN.sub("", query).strip()
+        # Android mund të dërgojë "play play ...", ndaj pastrohet disa herë
+        for _ in range(3):
+            cleaned = FILLER_PATTERN.sub("", query).strip()
+            if cleaned == query:
+                break
+            query = cleaned
         # Hiq pikësimin e tepërt nga transkriptimi i zërit
         query = re.sub(r"[\"“”]", "", query).strip(" .,!?")
         return query
 
     def _search(self, query: str) -> list:
+        """Kthen deri në 10 kandidatë (id + titull) nga YouTube Search."""
         r = requests.get(
             YOUTUBE_SEARCH_URL,
             params={
                 "part": "snippet",
                 "q": query,
                 "type": "video",
-                "videoCategoryId": "10",
-                "videoEmbeddable": "true",
-                "videoSyndicated": "true",
+                "videoCategoryId": "10",      # Music
+                "videoEmbeddable": "true",    # vetëm video që lejojnë embed
+                "videoSyndicated": "true",    # vetëm ato që luhen jashtë youtube.com
                 "maxResults": 10,
                 "key": self.api_key,
             },
@@ -108,6 +119,7 @@ class MusicEngine:
         ]
 
     def _pick_playable(self, candidates: list):
+        """Kontrollon me videos.list (1 njësi kuote) dhe kthen të parin që luhet."""
         ids = ",".join(c["id"] for c in candidates)
         r = requests.get(
             YOUTUBE_VIDEOS_URL,
@@ -121,7 +133,7 @@ class MusicEngine:
         r.raise_for_status()
         info = {v["id"]: v for v in r.json().get("items", [])}
 
-        for c in candidates:
+        for c in candidates:  # ruan rendin e rëndësisë nga kërkimi
             v = info.get(c["id"])
             if not v:
                 continue
