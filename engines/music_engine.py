@@ -21,7 +21,7 @@ class MusicEngine:
         self.api_key = os.environ.get("YOUTUBE_API_KEY", "")
         self._cache = {}  # {query_normalizuar: (timestamp, rezultati)}
 
-    # ---------- Pika hyrëse (e njëjta si më parë) ----------
+    # ---------- Pika hyrëse ----------
     def process(self, query: str) -> dict:
         return self.search_music(query)
 
@@ -96,15 +96,17 @@ class MusicEngine:
 
     def _search(self, query: str) -> list:
         """Kthen deri në 10 kandidatë (id + titull) nga YouTube Search."""
+        # Shtojmë "audio" në kërkesë për të shmangur bllokimet e embed (Error 152)
+        safe_query = f"{query} audio"
+        
         r = requests.get(
             YOUTUBE_SEARCH_URL,
             params={
                 "part": "snippet",
-                "q": query,
+                "q": safe_query,
                 "type": "video",
-                "videoCategoryId": "10",      # Music
+                "videoCategoryId": "10",    # Music
                 "videoEmbeddable": "true",    # vetëm video që lejojnë embed
-                "videoSyndicated": "true",    # vetëm ato që luhen jashtë youtube.com
                 "maxResults": 10,
                 "key": self.api_key,
             },
@@ -119,7 +121,7 @@ class MusicEngine:
         ]
 
     def _pick_playable(self, candidates: list):
-        """Kontrollon me videos.list (1 njësi kuote) dhe kthen të parin që luhet."""
+        """Kontrollon me videos.list dhe kthen të parin që luhet."""
         ids = ",".join(c["id"] for c in candidates)
         r = requests.get(
             YOUTUBE_VIDEOS_URL,
