@@ -281,6 +281,21 @@ def process_request():
 
         logger.info(f"User Input [{user_id}]: {user_text}")
 
+        # --- KONTROLLI DIREKT PËR MUZIKË ---
+        music_triggers = ["play", "luaj", "luaje", "music", "song", "këngë", "kenge"]
+        is_music_request = any(trig in clean_input for trig in music_triggers) or data.get("intent") == "play_music"
+
+        if is_music_request and music_engine is not None:
+            try:
+                music_res = music_engine.process(user_text)
+                if isinstance(music_res, dict):
+                    if 'status' not in music_res:
+                        music_res['status'] = 'success'
+                    return jsonify(music_res), 200
+            except Exception as m_err:
+                logger.error(f"[Music Engine Direct Error]: {m_err}")
+        # ------------------------------------
+
         news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
         is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
 
@@ -358,7 +373,6 @@ def process_request():
         execution_result = executor.execute_action(route_name, response_data)
         final_response = execution_result.get('response', response_data)
 
-        # Pjesa e pastruar për muzikën: përcjell direkt atë që kthen music_engine.py pa shkarkime
         if route_name == "music" or response_data.get("intent") == "play_music":
             if not isinstance(final_response, dict):
                 final_response = {"text": str(final_response)}
@@ -455,10 +469,5 @@ def run_cli():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-
-    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False))
-    flask_thread.daemon = True
-    flask_thread.start()
-
-    run_cli()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
