@@ -22,15 +22,18 @@ class MusicEngine:
         if not self.api_key:
             return {"error": "YouTube API key is missing on server"}
 
-        print(f"[FalconAI Music Engine] Kërkimi për: {query}")
+        print(f"[FalconAI YouTube Music] Kërkimi për: {query}")
         try:
+            # Shtojmë "official audio" ose "vevo" në kërkim për të siguruar versionin muzikor nga YouTube Music
+            enhanced_query = f"{query} official audio"
+            
             r = requests.get(
                 YOUTUBE_SEARCH_URL,
                 params={
                     "part": "snippet",
-                    "q": f"{query} audio",
+                    "q": enhanced_query,
                     "type": "video",
-                    "videoCategoryId": "10",
+                    "videoCategoryId": "10",  # Kategoria 10 e YouTube është gjithmonë "Music"
                     "maxResults": 1,
                     "key": self.api_key,
                 },
@@ -38,12 +41,32 @@ class MusicEngine:
             )
             r.raise_for_status()
             items = r.json().get("items", [])
+            
+            # Nëse nuk gjen me "official audio", provojmë vetëm me emrin e artistit/këngës
             if not items:
-                return {"error": "No results found"}
+                r = requests.get(
+                    YOUTUBE_SEARCH_URL,
+                    params={
+                        "part": "snippet",
+                        "q": query,
+                        "type": "video",
+                        "videoCategoryId": "10",
+                        "maxResults": 1,
+                        "key": self.api_key,
+                    },
+                    timeout=10,
+                )
+                items = r.json().get("items", [])
+
+            if not items:
+                return {"error": "No music results found"}
 
             video_item = items[0]
             video_id = video_item["id"]["videoId"]
             title = html.unescape(video_item["snippet"]["title"])
+
+            # Krijojmë linkun e YouTube Music dhe Video ID të pastër për ExoPlayer
+            music_url = f"https://music.youtube.com/watch?v={video_id}"
 
             return {
                 "text": f"Playing {title}",
@@ -51,7 +74,7 @@ class MusicEngine:
                 "data": {
                     "title": title,
                     "video_id": video_id,
-                    "audio_url": f"https://www.youtube.com/watch?v={video_id}",
+                    "audio_url": music_url,
                     "duration": 180000
                 }
             }
