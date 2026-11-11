@@ -1,9 +1,7 @@
 import os
 import re
 import html
-import requests
-
-YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+import yt_dlp
 
 FILLER_PATTERN = re.compile(
     r"^\s*(please\s+)?(play|put on|listen to|luaj|luaje|vendos|ndiz|ndize|dua te degjoj|dua të dëgjoj)\s+",
@@ -12,53 +10,48 @@ FILLER_PATTERN = re.compile(
 
 class MusicEngine:
     def __init__(self):
-        self.api_key = os.environ.get("YOUTUBE_API_KEY", "")
+        pass
 
     def process(self, query: str) -> dict:
         query = self._clean_query(query)
         if not query:
             return {"error": "No search query provided"}
 
-        if not self.api_key:
-            return {"error": "Music service is not configured"}
-
         print(f"[FalconAI Music Engine] Kërkimi për: {query}")
         try:
-            r = requests.get(
-                YOUTUBE_SEARCH_URL,
-                params={
-                    "part": "snippet",
-                    "q": f"{query} audio",
-                    "type": "video",
-                    "videoCategoryId": "10",
-                    "maxResults": 1,
-                    "key": self.api_key,
-                },
-                timeout=10,
-            )
-            r.raise_for_status()
-            items = r.json().get("items", [])
-            if not items:
-                return {"error": "No results found"}
-
-            video_item = items[0]
-            video_id = video_item["id"]["videoId"]
-            title = html.unescape(video_item["snippet"]["title"])
-
-            # Krijojmë një stream URL të qëndrueshëm që ExoPlayer e lexon përmes YouTube
-            # Përdorim NewPipe/Invidious proxy ose një format direkt të audio stream
-            audio_url = f"https://www.youtube.com/watch?v={video_id}"
-
-            return {
-                "text": f"Playing {title}",
-                "voice_text": f"Now playing {title}",
-                "data": {
-                    "title": title,
-                    "audio_url": audio_url,
-                    "video_id": video_id,
-                    "duration": 180000
-                }
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'noplaylist': True,
+                'quiet': True,
+                'default_search': 'ytsearch1',
             }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(query, download=False)
+                if 'entries' in info:
+                    entries = info['entries']
+                    if not entries:
+                        return {"error": "No results found"}
+                    info = entries[0]
+
+                title = html.unescape(info.get('title', query))
+                audio_url = info.get('url') # Kjo është URL-ja direkte e stream-it audio (.m4a/.webm)
+                video_id = info.get('id', '')
+                duration_sec = info.get('duration', 180)
+                
+                if not audio_url:
+                    return {"error": "Could not extract direct audio stream"}
+
+                return {
+                    "text": f"Playing {title}",
+                    "voice_text": f"Now playing {title}",
+                    "data": {
+                        "title": title,
+                        "audio_url": audio_url,
+                        "video_id": video_id,
+                        "duration": int(duration_sec * 1000)
+                    }
+                }
         except Exception as e:
             print(f"[FalconAI Music Engine Error]: {e}")
             return {"error": str(e)}
