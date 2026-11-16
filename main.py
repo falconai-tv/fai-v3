@@ -202,16 +202,26 @@ def watch_start():
         if watch_companion is None:
             return jsonify({"status": "error", "message": "Watch Companion not initialized."}), 500
 
-        data = request.get_json() or {}
-        user_id = data.get('user_id', 'default_user')
+        data = request.get_json(silent=True) or {}
+        session_id = data.get('session_id') or data.get('user_id', 'default_user')
         channel_url = data.get('channel_url', '')
         channel_name = data.get('channel_name', '')
+        capture_interval = data.get('capture_interval', 5.0)
+        language = data.get('language', None)
+        enable_audio = data.get('enable_audio', True)
+        enable_vision = data.get('enable_vision', True)
 
         if not channel_url:
             return jsonify({"status": "error", "message": "channel_url is required"}), 400
 
         result = watch_companion.start_session(
-            session_id=user_id, channel_url=channel_url, channel_name=channel_name
+            session_id=session_id,
+            channel_url=channel_url,
+            channel_name=channel_name,
+            capture_interval=capture_interval,
+            language=language,
+            enable_audio=enable_audio,
+            enable_vision=enable_vision
         )
         result['status'] = 'success'
         return jsonify(result), 200
@@ -226,14 +236,21 @@ def watch_ask():
         if watch_companion is None:
             return jsonify({"status": "error", "message": "Watch Companion not initialized."}), 500
 
-        data = request.get_json() or {}
-        user_id = data.get('user_id', 'default_user')
-        question = data.get('text', '')
+        data = request.get_json(silent=True) or {}
+        session_id = data.get('session_id') or data.get('user_id', 'default_user')
+        user_id = data.get('user_id', 'tv_user')
+        question = data.get('text') or data.get('question', '')
+        image_b64 = data.get('image_b64')
 
         if not question:
-            return jsonify({"status": "error", "message": "text is required"}), 400
+            return jsonify({"status": "error", "message": "text or question is required"}), 400
 
-        result = watch_companion.ask(session_id=user_id, user_id=user_id, question=question)
+        result = watch_companion.ask(
+            session_id=session_id,
+            user_id=user_id,
+            question=question,
+            image_b64=image_b64
+        )
         result['status'] = 'success'
         return jsonify(result), 200
     except Exception as e:
@@ -247,14 +264,33 @@ def watch_stop():
         if watch_companion is None:
             return jsonify({"status": "error", "message": "Watch Companion not initialized."}), 500
 
-        data = request.get_json() or {}
-        user_id = data.get('user_id', 'default_user')
+        data = request.get_json(silent=True) or {}
+        session_id = data.get('session_id') or data.get('user_id', 'default_user')
 
-        result = watch_companion.stop_session(user_id)
+        result = watch_companion.stop_session(session_id)
         result['status'] = 'success'
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"[WATCH STOP] Error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/watch/status', methods=['GET', 'POST'])
+def watch_status():
+    try:
+        if watch_companion is None:
+            return jsonify({"status": "error", "message": "Watch Companion not initialized."}), 500
+
+        if request.method == 'POST':
+            data = request.get_json(silent=True) or {}
+            session_id = data.get('session_id') or data.get('user_id', 'default_user')
+        else:
+            session_id = request.args.get('session_id') or request.args.get('user_id', 'default_user')
+
+        result = watch_companion.get_status(session_id)
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[WATCH STATUS] Error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -281,7 +317,6 @@ def process_request():
 
         logger.info(f"User Input [{user_id}]: {user_text}")
 
-        # --- KONTROLLI DIREKT PËR MUZIKË ---
         music_triggers = ["play", "luaj", "luaje", "music", "song", "këngë", "kenge"]
         is_music_request = any(trig in clean_input for trig in music_triggers) or data.get("intent") == "play_music"
 
@@ -294,7 +329,6 @@ def process_request():
                     return jsonify(music_res), 200
             except Exception as m_err:
                 logger.error(f"[Music Engine Direct Error]: {m_err}")
-        # ------------------------------------
 
         news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
         is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
