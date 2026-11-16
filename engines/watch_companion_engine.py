@@ -482,7 +482,7 @@ class WatchCompanionEngine:
         return ""
 
     def _describe_image(self, jpeg_bytes: bytes) -> str:
-        api_key = os.getenv("GROQ_API_KEY", "")
+        api_key = os.getenv("GROQ_API_KEY", "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")
         if not api_key or not VISION_MODEL or not jpeg_bytes:
             return ""
 
