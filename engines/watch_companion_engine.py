@@ -122,6 +122,7 @@ class _WatchSession:
     frame_ready: threading.Event = field(default_factory=threading.Event)
     audio_queue: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=3))
     ffmpeg_proc: subprocess.Popen = None
+    ffmpeg_video_proc: subprocess.Popen = None
     threads: list = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     started_at: float = field(default_factory=time.time)
@@ -140,7 +141,7 @@ class WatchCompanionEngine:
         self._shutdown = threading.Event()
 
         if not self._ffmpeg_available:
-            logger.warning("[WATCH] ffmpeg not found - audio transcription disabled")
+            logger.warning("[WATCH] ffmpeg not found - audio and video streaming will be limited")
 
         self._reaper = threading.Thread(target=self._reaper_loop, daemon=True)
         self._reaper.start()
@@ -196,12 +197,13 @@ class WatchCompanionEngine:
 
         session.stop_event.set()
         session.frame_ready.set()
-        proc = session.ffmpeg_proc
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        
+        for proc in [session.ffmpeg_proc, session.ffmpeg_video_proc]:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
         logger.info(f"[WATCH] Stopped '{session_id}'")
         return {"status": "stopped", "session_id": session_id}
@@ -247,21 +249,94 @@ class WatchCompanionEngine:
                 self.stop_session(sid)
 
     def _video_loop(self, s: _WatchSession):
+        """Përdor FFmpeg subprocess për të lexuar stream-in HLS (.m3u8) dhe nxjerr frames si MJPEG pipe"""
+        failures = 0
+        while not s.stop_event.is_set():
+            if not self._ffmpeg_available:
+                # Fallback te cv2.VideoCapture nëse ffmpeg nuk gjendet
+                self._video_loop_cv2(s)
+                return
+
+            cmd = [
+                "ffmpeg", "-nostdin", "-loglevel", "error",
+                "-rw_timeout", "8000000",
+                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                "-i", s.channel_url,
+                "-vf", f"fps=1/{s.capture_interval}",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "pipe:1"
+            ]
+
+            proc = None
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                s.ffmpeg_video_proc = proc
+                buffer = bytearray()
+                got_frame = False
+
+                while not s.stop_event.is_set():
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    buffer.extend(chunk)
+
+                    while True:
+                        start = buffer.find(b'\xff\xd8')
+                        end = buffer.find(b'\xff\xd9')
+                        if start != -1 and end != -1 and end > start:
+                            jpeg_data = bytes(buffer[start:end+2])
+                            del buffer[:end+2]
+
+                            frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
+                            if frame is not None:
+                                got_frame = True
+                                failures = 0
+                                s.video_ok = True
+                                with s.lock:
+                                    s.latest_jpeg = jpeg_data
+                                    s.latest_jpeg_time = time.time()
+
+                                s.pending_frame = frame
+                                s.frame_ready.set()
+                        else:
+                            break
+            except Exception as e:
+                logger.warning(f"[WATCH] Video pipe error for '{s.session_id}': {e}")
+            finally:
+                if proc:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                s.ffmpeg_video_proc = None
+
+            if s.stop_event.is_set():
+                break
+
+            s.video_ok = False
+            failures += 1
+            if failures >= MAX_STREAM_FAILURES:
+                logger.warning(f"[WATCH] Video stream unreachable for '{s.session_id}'")
+                self._push_screen(s, "(The video stream could not be read.)", force=True)
+                break
+            s.stop_event.wait(min(2 * failures, 10))
+
+    def _video_loop_cv2(self, s: _WatchSession):
+        """Fallback metodë me OpenCV VideoCapture nëse ffmpeg mungon"""
         cap = None
         failures = 0
         last_pick = 0.0
         try:
             while not s.stop_event.is_set():
                 if cap is None:
-                    cap = cv2.VideoCapture(s.channel_url)
+                    cap = cv2.VideoCapture(s.channel_url, cv2.CAP_FFMPEG)
                     if not cap.isOpened():
                         cap.release()
                         cap = None
                         failures += 1
                         s.video_ok = False
                         if failures >= MAX_STREAM_FAILURES:
-                            logger.warning(f"[WATCH] Video stream unreachable for '{s.session_id}'")
-                            self._push_screen(s, "(The video stream could not be read.)", force=True)
                             break
                         s.stop_event.wait(min(2 * failures, 10))
                         continue
@@ -287,7 +362,7 @@ class WatchCompanionEngine:
                         s.frame_ready.set()
                         last_pick = now
         except Exception as e:
-            logger.error(f"[WATCH] Video loop crashed for '{s.session_id}': {e}")
+            logger.error(f"[WATCH] Video loop CV2 crashed for '{s.session_id}': {e}")
         finally:
             s.video_ok = False
             if cap is not None:
@@ -449,7 +524,7 @@ class WatchCompanionEngine:
         return buf.getvalue()
 
     def _transcribe(self, wav_bytes: bytes, language: str) -> str:
-        api_key = os.getenv("GROQ_API_KEY", "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")
+        api_key = os.getenv("GROQ_API_KEY", "")
         if not api_key:
             return ""
 
@@ -482,7 +557,7 @@ class WatchCompanionEngine:
         return ""
 
     def _describe_image(self, jpeg_bytes: bytes) -> str:
-        api_key = os.getenv("GROQ_API_KEY", "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")
+        api_key = os.getenv("GROQ_API_KEY", "")
         if not api_key or not VISION_MODEL or not jpeg_bytes:
             return ""
 
