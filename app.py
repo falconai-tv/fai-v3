@@ -1,6 +1,139 @@
 import os
-from main import app
+import logging
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("FalconAI.App")
+
+app = Flask(__name__)
+CORS(app)
+
+try:
+    from engines.conversation_engine import ConversationEngine
+    from engines.watch_companion_engine import WatchCompanionEngine
+
+    conversation_engine = ConversationEngine()
+    watch_engine = WatchCompanionEngine(conversation_engine)
+    logger.info("Engines u ngarkuan me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të engines: {e}")
+    conversation_engine = None
+    watch_engine = None
+
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({
+        "status": "online",
+        "service": "FalconAI Engine v3 API",
+        "companion": "active" if watch_engine else "inactive"
+    }), 200
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+@app.route('/watch/start', methods=['POST'])
+def handle_watch_start():
+    if not watch_engine:
+        return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    
+    session_id = data.get('session_id')
+    channel_url = data.get('channel_url')
+    channel_name = data.get('channel_name', 'Live Channel')
+    capture_interval = data.get('capture_interval', 5.0)
+    language = data.get('language', None)
+    enable_audio = data.get('enable_audio', True)
+    enable_vision = data.get('enable_vision', True)
+
+    if not session_id or not channel_url:
+        return jsonify({
+            "status": "error",
+            "message": "Both 'session_id' and 'channel_url' are required fields."
+        }), 400
+
+    res = watch_engine.start_session(
+        session_id=session_id,
+        channel_url=channel_url,
+        channel_name=channel_name,
+        capture_interval=capture_interval,
+        language=language,
+        enable_audio=enable_audio,
+        enable_vision=enable_vision
+    )
+    
+    return jsonify(res), 200
+
+@app.route('/watch/ask', methods=['POST'])
+def handle_watch_ask():
+    if not watch_engine:
+        return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    
+    session_id = data.get('session_id')
+    user_id = data.get('user_id', 'tv_user')
+    
+    question = data.get('text') or data.get('question')
+    image_b64 = data.get('image_b64')
+
+    if not session_id or not question:
+        return jsonify({
+            "status": "error",
+            "message": "Both 'session_id' and 'text' (or 'question') are required."
+        }), 400
+
+    result = watch_engine.ask(
+        session_id=session_id,
+        user_id=user_id,
+        question=question,
+        image_b64=image_b64
+    )
+    
+    return jsonify(result), 200
+
+@app.route('/watch/stop', methods=['POST'])
+def handle_watch_stop():
+    if not watch_engine:
+        return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id')
+
+    if not session_id:
+        return jsonify({
+            "status": "error",
+            "message": "'session_id' is required to stop session."
+        }), 400
+
+    res = watch_engine.stop_session(session_id)
+    return jsonify(res), 200
+
+
+@app.route('/watch/status', methods=['GET', 'POST'])
+def handle_watch_status():
+    if not watch_engine:
+        return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        session_id = data.get('session_id')
+    else:
+        session_id = request.args.get('session_id')
+
+    if not session_id:
+        return jsonify({"status": "error", "message": "'session_id' parameter missing"}), 400
+
+    res = watch_engine.get_status(session_id)
+    return jsonify(res), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    logger.info(f"FalconAI v3 server po niset në portën {port}...")
+    app.run(host="0.0.0.0", port=port, debug=False)
