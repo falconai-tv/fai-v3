@@ -24,6 +24,7 @@ except Exception as e:
     conversation_engine = None
     watch_engine = None
 
+
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
@@ -37,13 +38,14 @@ def index():
 def health():
     return jsonify({"status": "ok"}), 200
 
+
 @app.route('/watch/start', methods=['POST'])
 def handle_watch_start():
     if not watch_engine:
         return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
 
     data = request.get_json(silent=True) or {}
-    
+
     session_id = data.get('session_id')
     channel_url = data.get('channel_url')
     channel_name = data.get('channel_name', 'Live Channel')
@@ -67,8 +69,9 @@ def handle_watch_start():
         enable_audio=enable_audio,
         enable_vision=enable_vision
     )
-    
+
     return jsonify(res), 200
+
 
 @app.route('/watch/ask', methods=['POST'])
 def handle_watch_ask():
@@ -76,10 +79,10 @@ def handle_watch_ask():
         return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
 
     data = request.get_json(silent=True) or {}
-    
+
     session_id = data.get('session_id')
     user_id = data.get('user_id', 'tv_user')
-    
+
     question = data.get('text') or data.get('question')
     image_b64 = data.get('image_b64')
 
@@ -95,8 +98,9 @@ def handle_watch_ask():
         question=question,
         image_b64=image_b64
     )
-    
+
     return jsonify(result), 200
+
 
 @app.route('/watch/stop', methods=['POST'])
 def handle_watch_stop():
@@ -132,6 +136,31 @@ def handle_watch_status():
 
     res = watch_engine.get_status(session_id)
     return jsonify(res), 200
+
+
+@app.route('/watch/debug', methods=['POST'])
+def handle_watch_debug():
+    """
+    DIAGNOSTIC ONLY. Disabled unless DEBUG_TOKEN is set in the environment.
+    Delete this route (and the env var) once the video pipeline works.
+    """
+    expected = os.environ.get("DEBUG_TOKEN", "")
+    if not expected:
+        return jsonify({"status": "error", "message": "Not found"}), 404
+
+    if not watch_engine:
+        return jsonify({"status": "error", "message": "Watch engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    if data.get("token") != expected:
+        return jsonify({"status": "error", "message": "Forbidden"}), 403
+
+    channel_url = data.get("channel_url")
+    if not channel_url:
+        return jsonify({"status": "error", "message": "'channel_url' is required."}), 400
+
+    return jsonify(watch_engine.debug_grab(channel_url)), 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
