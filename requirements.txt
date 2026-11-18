@@ -2,6 +2,7 @@ Flask
 flask-cors
 gunicorn
 numpy
+imageio-ffmpeg
 opencv-python-headless
 pytesseract
 requests
