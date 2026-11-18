@@ -17,8 +17,12 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
-import pytesseract
 import requests
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 
 try:
     from dotenv import load_dotenv
@@ -28,10 +32,29 @@ except ImportError:
 
 logger = logging.getLogger("FalconAI.WatchCompanion")
 
+
+def _find_ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return ""
+
+
+FFMPEG = _find_ffmpeg()
+
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 SAMPLE_RATE = 16000
 BYTES_PER_SECOND = SAMPLE_RATE * 2
@@ -42,6 +65,7 @@ IDLE_TIMEOUT = 600
 REAPER_INTERVAL = 30
 VISION_CACHE_SECONDS = 15
 MAX_CONTEXT_CHARS = 1800
+FIRST_FRAME_WAIT_SECONDS = 12
 
 HALLUCINATIONS = (
     "thank you for watching",
@@ -94,13 +118,20 @@ def _is_hallucination(text: str) -> bool:
     return any(phrase in lowered for phrase in HALLUCINATIONS)
 
 
-def _detect_ocr_lang() -> str:
+def _detect_ocr() -> tuple:
+    """Returns (ocr_available, ocr_lang)."""
+    if pytesseract is None:
+        return False, "eng"
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        return False, "eng"
     try:
         available = set(pytesseract.get_languages(config=""))
     except Exception:
-        return "eng"
+        return True, "eng"
     langs = [l for l in ("eng", "sqi") if l in available]
-    return "+".join(langs) if langs else "eng"
+    return True, ("+".join(langs) if langs else "eng")
 
 
 @dataclass
@@ -136,23 +167,33 @@ class WatchCompanionEngine:
         self.conversation_engine = conversation_engine
         self._sessions = {}
         self._sessions_lock = threading.Lock()
-        self._ffmpeg_available = shutil.which("ffmpeg") is not None
-        self._ocr_lang = _detect_ocr_lang()
+        self._ffmpeg_available = bool(FFMPEG)
+        self._ocr_ok, self._ocr_lang = _detect_ocr()
         self._shutdown = threading.Event()
 
         if not self._ffmpeg_available:
             logger.warning("[WATCH] ffmpeg not found - audio and video streaming will be limited")
+        else:
+            logger.info(f"[WATCH] Using ffmpeg at: {FFMPEG}")
+
+        if not self._ocr_ok:
+            logger.warning("[WATCH] tesseract not found - OCR disabled, using vision only")
 
         self._reaper = threading.Thread(target=self._reaper_loop, daemon=True)
         self._reaper.start()
+
+    # ------------------------------------------------------------------
+    # Session lifecycle
+    # ------------------------------------------------------------------
 
     def start_session(self, session_id: str, channel_url: str, channel_name: str = "",
                       capture_interval: float = 5.0, language: str = None,
                       enable_audio: bool = True, enable_vision: bool = True) -> dict:
         self.stop_session(session_id)
 
-        audio_on = bool(enable_audio and self._ffmpeg_available and os.getenv("GROQ_API_KEY"))
-        vision_on = bool(enable_vision and os.getenv("GROQ_API_KEY") and VISION_MODEL)
+        has_key = bool(os.getenv("GROQ_API_KEY"))
+        audio_on = bool(enable_audio and self._ffmpeg_available and has_key)
+        vision_on = bool(enable_vision and has_key and VISION_MODEL)
 
         session = _WatchSession(
             session_id=session_id,
@@ -164,7 +205,9 @@ class WatchCompanionEngine:
             vision_enabled=vision_on,
         )
 
-        workers = [self._video_loop, self._ocr_loop]
+        workers = [self._video_loop]
+        if self._ocr_ok:
+            workers.append(self._ocr_loop)
         if audio_on:
             workers += [self._audio_reader_loop, self._transcribe_loop]
 
@@ -175,17 +218,22 @@ class WatchCompanionEngine:
         with self._sessions_lock:
             self._sessions[session_id] = session
 
+        # reset history BEFORE workers start, using the same key ask() uses
+        self._reset_watch_history(session_id)
+
         for t in session.threads:
             t.start()
 
-        self._reset_watch_history(session_id)
-        logger.info(f"[WATCH] Started '{session_id}' on '{channel_name}' audio={audio_on} vision={vision_on}")
+        logger.info(
+            f"[WATCH] Started '{session_id}' on '{channel_name}' "
+            f"audio={audio_on} vision={vision_on} ocr={self._ocr_ok}"
+        )
 
         return {
             "status": "started",
             "session_id": session_id,
             "channel_name": channel_name,
-            "features": {"ocr": True, "audio": audio_on, "vision": vision_on},
+            "features": {"ocr": self._ocr_ok, "audio": audio_on, "vision": vision_on},
         }
 
     def stop_session(self, session_id: str) -> dict:
@@ -197,7 +245,7 @@ class WatchCompanionEngine:
 
         session.stop_event.set()
         session.frame_ready.set()
-        
+
         for proc in [session.ffmpeg_proc, session.ffmpeg_video_proc]:
             if proc is not None:
                 try:
@@ -225,6 +273,10 @@ class WatchCompanionEngine:
         if not session:
             return {"status": "not_found", "session_id": session_id}
         with session.lock:
+            frame_age = (
+                int(time.time() - session.latest_jpeg_time)
+                if session.latest_jpeg_time else None
+            )
             return {
                 "status": "active",
                 "session_id": session_id,
@@ -233,6 +285,10 @@ class WatchCompanionEngine:
                 "audio_ok": session.audio_ok,
                 "audio_enabled": session.audio_enabled,
                 "vision_enabled": session.vision_enabled,
+                "ocr_enabled": self._ocr_ok,
+                "ffmpeg": FFMPEG or None,
+                "has_frame": session.latest_jpeg is not None,
+                "frame_age_seconds": frame_age,
                 "screen_entries": len(session.screen_buffer),
                 "speech_entries": len(session.speech_buffer),
                 "uptime_seconds": int(time.time() - session.started_at),
@@ -248,6 +304,42 @@ class WatchCompanionEngine:
                 logger.info(f"[WATCH] Idle timeout for '{sid}'")
                 self.stop_session(sid)
 
+    # ------------------------------------------------------------------
+    # Video
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _drain_stderr(proc, sid: str):
+        try:
+            for line in iter(proc.stderr.readline, b""):
+                msg = line.decode("utf-8", errors="ignore").strip()
+                if msg:
+                    logger.warning(f"[WATCH][ffmpeg:{sid}] {msg}")
+        except Exception:
+            pass
+
+    def _publish_frame(self, s: _WatchSession, frame):
+        """Store a downscaled JPEG for vision and hand the frame to OCR."""
+        try:
+            self._store_jpeg(s, frame)
+        except Exception as e:
+            logger.warning(f"[WATCH] Could not store frame: {e}")
+
+        s.video_ok = True
+        if self._ocr_ok:
+            s.pending_frame = frame
+            s.frame_ready.set()
+
+    def _store_jpeg(self, s: _WatchSession, frame):
+        h, w = frame.shape[:2]
+        if w > 640:
+            frame = cv2.resize(frame, (640, int(h * 640 / w)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if ok:
+            with s.lock:
+                s.latest_jpeg = buf.tobytes()
+                s.latest_jpeg_time = time.time()
+
     def _video_loop(self, s: _WatchSession):
         failures = 0
         while not s.stop_event.is_set():
@@ -256,52 +348,51 @@ class WatchCompanionEngine:
                 return
 
             cmd = [
-                "ffmpeg", "-nostdin", "-loglevel", "warning",
-                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                FFMPEG, "-nostdin", "-loglevel", "warning",
+                "-user_agent", USER_AGENT,
                 "-rw_timeout", "10000000",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                 "-i", s.channel_url,
-                "-vf", f"fps=1/{s.capture_interval}",
-                "-f", "image2pipe",
-                "-vcodec", "mjpeg",
-                "pipe:1"
+                "-an",
+                "-vf", f"fps=1/{s.capture_interval},scale=960:-2",
+                "-q:v", "5",
+                "-f", "image2pipe", "-vcodec", "mjpeg",
+                "pipe:1",
             ]
 
             proc = None
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 s.ffmpeg_video_proc = proc
+                threading.Thread(
+                    target=self._drain_stderr, args=(proc, s.session_id), daemon=True
+                ).start()
                 buffer = bytearray()
 
                 while not s.stop_event.is_set():
-                    chunk = proc.stdout.read(4096)
+                    chunk = proc.stdout.read1(65536)  # returns whatever is available
                     if not chunk:
-                        err_output = proc.stderr.read(1024).decode('utf-8', errors='ignore')
-                        if err_output:
-                            logger.warning(f"[WATCH] FFmpeg stderr error: {err_output}")
                         break
-
                     buffer.extend(chunk)
 
                     while True:
-                        start = buffer.find(b'\xff\xd8')
-                        end = buffer.find(b'\xff\xd9')
-                        if start != -1 and end != -1 and end > start:
-                            jpeg_data = bytes(buffer[start:end+2])
-                            del buffer[:end+2]
-
-                            frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
-                            if frame is not None:
-                                failures = 0
-                                s.video_ok = True
-                                with s.lock:
-                                    s.latest_jpeg = jpeg_data
-                                    s.latest_jpeg_time = time.time()
-
-                                s.pending_frame = frame
-                                s.frame_ready.set()
-                        else:
+                        start = buffer.find(b"\xff\xd8")
+                        if start == -1:
+                            buffer.clear()
                             break
+                        end = buffer.find(b"\xff\xd9", start + 2)
+                        if end == -1:
+                            if start > 0:
+                                del buffer[:start]
+                            break
+
+                        jpeg_data = bytes(buffer[start:end + 2])
+                        del buffer[:end + 2]
+
+                        frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            failures = 0
+                            self._publish_frame(s, frame)
             except Exception as e:
                 logger.warning(f"[WATCH] Video pipe error for '{s.session_id}': {e}")
             finally:
@@ -355,11 +446,10 @@ class WatchCompanionEngine:
                 s.video_ok = True
 
                 now = time.time()
-                if now - last_pick >= s.capture_interval and not s.frame_ready.is_set():
+                if now - last_pick >= s.capture_interval:
                     ok, frame = cap.retrieve()
                     if ok and frame is not None:
-                        s.pending_frame = frame
-                        s.frame_ready.set()
+                        self._publish_frame(s, frame)
                         last_pick = now
         except Exception as e:
             logger.error(f"[WATCH] Video loop CV2 crashed for '{s.session_id}': {e}")
@@ -367,6 +457,10 @@ class WatchCompanionEngine:
             s.video_ok = False
             if cap is not None:
                 cap.release()
+
+    # ------------------------------------------------------------------
+    # OCR
+    # ------------------------------------------------------------------
 
     def _ocr_loop(self, s: _WatchSession):
         while not s.stop_event.is_set():
@@ -379,22 +473,11 @@ class WatchCompanionEngine:
                 continue
 
             try:
-                self._store_jpeg(s, frame)
                 text = self._extract_text(frame)
                 if text:
                     self._push_screen(s, text)
             except Exception as e:
                 logger.warning(f"[WATCH] OCR cycle failed: {e}")
-
-    def _store_jpeg(self, s: _WatchSession, frame):
-        h, w = frame.shape[:2]
-        if w > 640:
-            frame = cv2.resize(frame, (640, int(h * 640 / w)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        if ok:
-            with s.lock:
-                s.latest_jpeg = buf.tobytes()
-                s.latest_jpeg_time = time.time()
 
     def _extract_text(self, frame) -> str:
         h = frame.shape[0]
@@ -422,12 +505,17 @@ class WatchCompanionEngine:
                     return
             s.screen_buffer.append({"time": time.time(), "text": text})
 
+    # ------------------------------------------------------------------
+    # Audio
+    # ------------------------------------------------------------------
+
     def _audio_reader_loop(self, s: _WatchSession):
         failures = 0
         chunk_bytes = BYTES_PER_SECOND * AUDIO_CHUNK_SECONDS
         while not s.stop_event.is_set():
             cmd = [
-                "ffmpeg", "-nostdin", "-loglevel", "error",
+                FFMPEG, "-nostdin", "-loglevel", "error",
+                "-user_agent", USER_AGENT,
                 "-rw_timeout", "8000000",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                 "-i", s.channel_url,
@@ -556,6 +644,10 @@ class WatchCompanionEngine:
 
         return ""
 
+    # ------------------------------------------------------------------
+    # Vision
+    # ------------------------------------------------------------------
+
     def _describe_image(self, jpeg_bytes: bytes) -> str:
         api_key = os.getenv("GROQ_API_KEY", "")
         if not api_key or not VISION_MODEL or not jpeg_bytes:
@@ -623,6 +715,10 @@ class WatchCompanionEngine:
                 s.vision_cache = {"time": time.time(), "text": description}
         return description
 
+    # ------------------------------------------------------------------
+    # Context + ask
+    # ------------------------------------------------------------------
+
     def _build_context(self, s: _WatchSession, visual: str):
         now = time.time()
         with s.lock:
@@ -652,8 +748,8 @@ class WatchCompanionEngine:
 
         return context, sources
 
-    def _watch_user_id(self, user_id: str) -> str:
-        return f"{user_id}_watch"
+    def _watch_user_id(self, session_id: str) -> str:
+        return f"{session_id}_watch"
 
     def _reset_watch_history(self, session_id: str):
         try:
@@ -672,6 +768,14 @@ class WatchCompanionEngine:
         except Exception:
             pass
 
+    def _wait_for_first_frame(self, s: _WatchSession):
+        deadline = time.time() + FIRST_FRAME_WAIT_SECONDS
+        while time.time() < deadline and not s.stop_event.is_set():
+            with s.lock:
+                if s.latest_jpeg:
+                    return
+            time.sleep(0.3)
+
     def ask(self, session_id: str, user_id: str, question: str, image_b64: str = None) -> dict:
         with self._sessions_lock:
             session = self._sessions.get(session_id)
@@ -684,6 +788,9 @@ class WatchCompanionEngine:
             }
 
         session.last_activity = time.time()
+
+        if not image_b64 and session.vision_enabled:
+            self._wait_for_first_frame(session)
 
         visual = self._get_visual_context(session, image_b64)
         context, sources = self._build_context(session, visual)
@@ -705,7 +812,7 @@ class WatchCompanionEngine:
                 f"The user asks: {question}"
             )
 
-        watch_uid = self._watch_user_id(user_id)
+        watch_uid = self._watch_user_id(session_id)
         result = self.conversation_engine.chat(watch_uid, augmented)
         self._scrub_history(watch_uid, augmented, question)
 
