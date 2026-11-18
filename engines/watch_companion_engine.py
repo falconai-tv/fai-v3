@@ -249,17 +249,16 @@ class WatchCompanionEngine:
                 self.stop_session(sid)
 
     def _video_loop(self, s: _WatchSession):
-        """Përdor FFmpeg subprocess për të lexuar stream-in HLS (.m3u8) dhe nxjerr frames si MJPEG pipe"""
         failures = 0
         while not s.stop_event.is_set():
             if not self._ffmpeg_available:
-                # Fallback te cv2.VideoCapture nëse ffmpeg nuk gjendet
                 self._video_loop_cv2(s)
                 return
 
             cmd = [
-                "ffmpeg", "-nostdin", "-loglevel", "error",
-                "-rw_timeout", "8000000",
+                "ffmpeg", "-nostdin", "-loglevel", "warning",
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "-rw_timeout", "10000000",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                 "-i", s.channel_url,
                 "-vf", f"fps=1/{s.capture_interval}",
@@ -270,15 +269,18 @@ class WatchCompanionEngine:
 
             proc = None
             try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 s.ffmpeg_video_proc = proc
                 buffer = bytearray()
-                got_frame = False
 
                 while not s.stop_event.is_set():
                     chunk = proc.stdout.read(4096)
                     if not chunk:
+                        err_output = proc.stderr.read(1024).decode('utf-8', errors='ignore')
+                        if err_output:
+                            logger.warning(f"[WATCH] FFmpeg stderr error: {err_output}")
                         break
+
                     buffer.extend(chunk)
 
                     while True:
@@ -290,7 +292,6 @@ class WatchCompanionEngine:
 
                             frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
                             if frame is not None:
-                                got_frame = True
                                 failures = 0
                                 s.video_ok = True
                                 with s.lock:
@@ -323,7 +324,6 @@ class WatchCompanionEngine:
             s.stop_event.wait(min(2 * failures, 10))
 
     def _video_loop_cv2(self, s: _WatchSession):
-        """Fallback metodë me OpenCV VideoCapture nëse ffmpeg mungon"""
         cap = None
         failures = 0
         last_pick = 0.0
