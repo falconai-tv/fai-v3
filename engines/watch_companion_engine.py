@@ -15,6 +15,7 @@ import threading
 import subprocess
 from collections import deque
 from dataclasses import dataclass, field
+from urllib.parse import urljoin
 
 import numpy as np
 import requests
@@ -132,6 +133,43 @@ def _detect_ocr() -> tuple:
         return True, "eng"
     langs = [l for l in ("eng", "sqi") if l in available]
     return True, ("+".join(langs) if langs else "eng")
+
+
+def _pick_low_variant(url: str) -> str:
+    """
+    If the URL is an HLS master playlist, return the lowest-bandwidth variant
+    that has video. Otherwise return the URL unchanged.
+    Much cheaper to decode on small CPUs.
+    """
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
+        if r.status_code != 200 or "#EXT-X-STREAM-INF" not in r.text:
+            return url
+
+        lines = r.text.splitlines()
+        candidates = []
+        for i, line in enumerate(lines):
+            if not line.startswith("#EXT-X-STREAM-INF"):
+                continue
+            m = re.search(r"BANDWIDTH=(\d+)", line)
+            bw = int(m.group(1)) if m else 10 ** 12
+            has_video = "RESOLUTION=" in line
+            for nxt in lines[i + 1:]:
+                nxt = nxt.strip()
+                if nxt and not nxt.startswith("#"):
+                    candidates.append((not has_video, bw, urljoin(url, nxt)))
+                    break
+
+        if not candidates:
+            return url
+
+        candidates.sort()  # video variants first, then lowest bandwidth
+        chosen = candidates[0][2]
+        logger.info(f"[WATCH] Using low variant: {chosen}")
+        return chosen
+    except Exception as e:
+        logger.warning(f"[WATCH] Could not resolve HLS variant: {e}")
+        return url
 
 
 @dataclass
@@ -305,6 +343,44 @@ class WatchCompanionEngine:
                 self.stop_session(sid)
 
     # ------------------------------------------------------------------
+    # Debug (diagnostics only - remove the route when done)
+    # ------------------------------------------------------------------
+
+    def debug_grab(self, url: str, timeout: int = 25, use_low_variant: bool = True) -> dict:
+        """Isolated test: grab 1 frame from the stream and return ffmpeg's stderr tail."""
+        if not FFMPEG:
+            return {"error": "ffmpeg not found"}
+
+        resolved = _pick_low_variant(url) if use_low_variant else url
+        cmd = [
+            FFMPEG, "-nostdin", "-loglevel", "info",
+            "-user_agent", USER_AGENT,
+            "-i", resolved,
+            "-an", "-frames:v", "1",
+            "-vf", "scale=640:-2",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+        ]
+        t0 = time.time()
+        try:
+            p = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            return {
+                "resolved_url": resolved,
+                "returncode": p.returncode,
+                "jpeg_bytes": len(p.stdout),
+                "seconds": round(time.time() - t0, 1),
+                "stderr_tail": p.stderr.decode("utf-8", "ignore")[-1500:],
+            }
+        except subprocess.TimeoutExpired as e:
+            return {
+                "resolved_url": resolved,
+                "error": "timeout",
+                "seconds": timeout,
+                "stderr_tail": (e.stderr or b"").decode("utf-8", "ignore")[-1500:],
+            }
+        except Exception as e:
+            return {"resolved_url": resolved, "error": str(e)}
+
+    # ------------------------------------------------------------------
     # Video
     # ------------------------------------------------------------------
 
@@ -342,9 +418,11 @@ class WatchCompanionEngine:
 
     def _video_loop(self, s: _WatchSession):
         failures = 0
+        video_url = _pick_low_variant(s.channel_url)
+
         while not s.stop_event.is_set():
             if not self._ffmpeg_available:
-                self._video_loop_cv2(s)
+                self._video_loop_cv2(s, video_url)
                 return
 
             cmd = [
@@ -352,7 +430,8 @@ class WatchCompanionEngine:
                 "-user_agent", USER_AGENT,
                 "-rw_timeout", "10000000",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-                "-i", s.channel_url,
+                "-probesize", "2000000", "-analyzeduration", "2000000",
+                "-i", video_url,
                 "-an",
                 "-vf", f"fps=1/{s.capture_interval},scale=960:-2",
                 "-q:v", "5",
@@ -414,14 +493,15 @@ class WatchCompanionEngine:
                 break
             s.stop_event.wait(min(2 * failures, 10))
 
-    def _video_loop_cv2(self, s: _WatchSession):
+    def _video_loop_cv2(self, s: _WatchSession, url: str = None):
+        url = url or s.channel_url
         cap = None
         failures = 0
         last_pick = 0.0
         try:
             while not s.stop_event.is_set():
                 if cap is None:
-                    cap = cv2.VideoCapture(s.channel_url, cv2.CAP_FFMPEG)
+                    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
                     if not cap.isOpened():
                         cap.release()
                         cap = None
