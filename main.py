@@ -102,14 +102,28 @@ except Exception as e:
 
 BACKGROUND_TRIGGERS = ["background", "sfond", "wallpaper", "backgroundin", "sfondin"]
 
-WEATHER_PATTERN = re.compile(r"\b(weather|moti|forecast|temperatura)\b", re.IGNORECASE)
-WEATHER_PREFIXES = ["weather in", "weather", "moti ne", "moti në", "moti", "forecast for", "forecast", "temperatura"]
 
-def extract_city(clean_input: str) -> str:
-    city_query = clean_input
-    for prefix in WEATHER_PREFIXES:
-        city_query = city_query.replace(prefix, "")
-    return city_query.strip() or "Prishtina"
+def _word_pattern(words):
+    """Regex që kap fjalë të plota (që 'war' mos kapet te 'warm' ose 'Warsaw')."""
+    return re.compile(r"\b(?:" + "|".join(re.escape(w) for w in words) + r")\b", re.IGNORECASE)
+
+
+WEATHER_PATTERN = _word_pattern(["weather", "moti", "forecast", "temperatura"])
+
+MUSIC_PATTERN = _word_pattern([
+    "play", "luaj", "luaje", "music", "song", "songs", "këngë", "kenge"
+])
+
+NEWS_PATTERN = _word_pattern([
+    "news", "latest", "war", "balkan", "tech", "sport", "sports", "business",
+    "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"
+])
+
+NEWS_INTENTS = [
+    "watch_news", "watch_war", "watch_balkan_news", "tech_news",
+    "sports_news", "business_news", "general_search"
+]
+
 
 @app.route('/')
 def index():
@@ -317,8 +331,30 @@ def process_request():
 
         logger.info(f"User Input [{user_id}]: {user_text}")
 
-        music_triggers = ["play", "luaj", "luaje", "music", "song", "këngë", "kenge"]
-        is_music_request = any(trig in clean_input for trig in music_triggers) or data.get("intent") == "play_music"
+        # 1. Bisedë: gjithmonë e para. Vetëm nëse mesazhi fillon me "chat:"
+        if conversation_engine is not None:
+            chat_result = conversation_engine.handle(user_id, user_text)
+            if chat_result is not None:
+                chat_result['status'] = 'success'
+                return jsonify(chat_result), 200
+
+        # 2. Moti (para muzikës dhe lajmeve, që "weather in Warsaw" mos shkojë te lajmet)
+        if WEATHER_PATTERN.search(clean_input) and weather_engine:
+            try:
+                # Teksti i plotë: motori nxjerr vetë qytetin; nëse nuk ka qytet,
+                # përdor lat/lon (GPS) ose IP-në e përdoruesit.
+                weather_res = weather_engine.get_weather(
+                    user_text,
+                    ip=client_ip(),
+                    lat=data.get("lat"),
+                    lon=data.get("lon"),
+                )
+                return jsonify(weather_res), 200
+            except Exception as w_err:
+                logger.error(f"[Weather Error]: {w_err}")
+
+        # 3. Muzikë
+        is_music_request = bool(MUSIC_PATTERN.search(clean_input)) or data.get("intent") == "play_music"
 
         if is_music_request and music_engine is not None:
             try:
@@ -330,8 +366,8 @@ def process_request():
             except Exception as m_err:
                 logger.error(f"[Music Engine Direct Error]: {m_err}")
 
-        news_triggers = ["news", "latest", "war", "balkan", "tech", "sport", "business", "politics", "lajme", "luftë", "europe", "asia", "america", "africa", "middle east"]
-        is_news_or_web = any(trig in clean_input for trig in news_triggers) or data.get("intent") in ["watch_news", "watch_war", "watch_balkan_news", "tech_news", "sports_news", "business_news", "general_search"]
+        # 4. Lajme / web
+        is_news_or_web = bool(NEWS_PATTERN.search(clean_input)) or data.get("intent") in NEWS_INTENTS
 
         if is_news_or_web and web_engine is not None:
             try:
@@ -343,12 +379,7 @@ def process_request():
             except Exception as web_err:
                 logger.error(f"[Web Engine Direct Error]: {web_err}")
 
-        if not is_news_or_web and conversation_engine is not None:
-            chat_result = conversation_engine.handle(user_id, user_text)
-            if chat_result is not None:
-                chat_result['status'] = 'success'
-                return jsonify(chat_result), 200
-
+        # 5. Background
         if background_engine and any(trig in clean_input for trig in BACKGROUND_TRIGGERS):
             try:
                 bg_result = background_engine.search(user_text)
@@ -379,22 +410,7 @@ def process_request():
             except Exception as bg_err:
                 logger.error(f"[Background Error]: {bg_err}")
 
-        if WEATHER_PATTERN.search(clean_input) and weather_engine:
-            city_query = extract_city(clean_input)
-            try:
-                try:
-                    weather_res = weather_engine.get_weather(
-                        city_query,
-                        ip=client_ip(),
-                        lat=data.get("lat"),
-                        lon=data.get("lon"),
-                    )
-                except TypeError:
-                    weather_res = weather_engine.get_weather(city_query)
-                return jsonify(weather_res), 200
-            except Exception as w_err:
-                logger.error(f"[Weather Error]: {w_err}")
-
+        # 6. Agjenti (kanale, librari, brain/router)
         response_data = agent.handle_request(user_text, user_id)
         route_name = response_data.get("type", "unknown")
 
@@ -461,17 +477,14 @@ def run_cli():
                     print("[Background]: No matching image found.\n")
                 continue
 
-            if WEATHER_PATTERN.search(clean_input):
-                city = extract_city(clean_input)
-
-                if weather_engine:
-                    try:
-                        weather_res = weather_engine.get_weather(city) if hasattr(weather_engine, 'get_weather') else weather_engine.process(city)
-                        msg = weather_res.get('data', {}).get('text', weather_res.get('text', str(weather_res)))
-                        print(f"[Response]: {msg}\n")
-                        continue
-                    except Exception as w_err:
-                        print(f"[Weather Error]: {w_err}")
+            if WEATHER_PATTERN.search(clean_input) and weather_engine:
+                try:
+                    weather_res = weather_engine.get_weather(user_input)
+                    msg = weather_res.get('data', {}).get('text', weather_res.get('text', str(weather_res)))
+                    print(f"[Response]: {msg}\n")
+                    continue
+                except Exception as w_err:
+                    print(f"[Weather Error]: {w_err}")
 
             if agent and executor:
                 response_data = agent.handle_request(user_input, "cli_user")
