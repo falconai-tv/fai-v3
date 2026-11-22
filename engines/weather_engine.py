@@ -3,6 +3,7 @@ import re
 import time
 import ipaddress
 import logging
+import unicodedata
 import requests
 
 try:
@@ -13,7 +14,7 @@ except ImportError:
 
 logger = logging.getLogger("FalconAI.WeatherEngine")
 
-API_KEY = os.getenv("OPENWEATHER_KEY", "f8a26ced25d514b94ad2d1e61bca80e1")
+API_KEY = os.getenv("OPENWEATHER_KEY", "")
 DEFAULT_CITY = os.getenv("WEATHER_FALLBACK_CITY", "San Francisco")
 
 SPEAK_ON_SERVER = os.getenv("WEATHER_SPEAK", "false").lower() == "true"
@@ -50,6 +51,27 @@ STOPWORDS = {
     "this", "week", "weekend", "rain", "raining", "sunny", "windy", "cloudy"
 }
 
+# Fjalë shqipe që nuk janë emra qytetesh
+STOPWORDS |= {
+    "moti", "mot", "ne", "në", "sot", "nesër", "nesër", "neser", "si", "është",
+    "eshte", "cili", "cila", "qysh", "po", "ka", "sa", "kohë", "kohe", "koha",
+    "për", "per", "dua", "më", "me", "trego", "tregom", "do", "të", "te",
+    "bëjë", "beje", "kam", "ndonjë", "ndonje", "temperatura", "shi", "diell",
+    "bore", "ftohtë", "ftohte", "nxehtë", "nxehte", "jashtë", "jashte",
+    "tani", "javën", "javen"
+}
+
+# Emra qytetesh që OpenWeather i njeh me emër tjetër
+CITY_ALIASES = {
+    "prishtina": "pristina",
+    "prishtinë": "pristina",
+    "prishtine": "pristina",
+    "tiranë": "tirana",
+    "tirane": "tirana",
+    "shkup": "skopje",
+}
+
+
 def _is_public_ip(ip):
     if not ip:
         return False
@@ -57,6 +79,7 @@ def _is_public_ip(ip):
         return ipaddress.ip_address(ip).is_global
     except ValueError:
         return False
+
 
 def _valid_coords(lat, lon):
     try:
@@ -66,6 +89,14 @@ def _valid_coords(lat, lon):
     if -90 <= lat <= 90 and -180 <= lon <= 180:
         return lat, lon
     return None, None
+
+
+def _ascii_fold(text):
+    """'Prishtinë' -> 'Prishtine', 'Çakor' -> 'Cakor'."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
+    )
+
 
 class WeatherEngine:
     def __init__(self, api_key=None):
@@ -112,7 +143,11 @@ class WeatherEngine:
     def extract_city(self, query):
         words = re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", (query or "").lower())
         city_words = [w for w in words if w not in STOPWORDS and len(w) > 1]
-        return " ".join(city_words).title() if city_words else None
+        if not city_words:
+            return None
+        city = " ".join(city_words)
+        city = CITY_ALIASES.get(city, city)
+        return city.title()
 
     def fetch_weather(self, city=None, lat=None, lon=None):
         params = {"appid": self.api_key, "units": "metric", "lang": "en"}
@@ -125,6 +160,13 @@ class WeatherEngine:
             target = f"'{city}'"
 
         response = requests.get(self.base_url, params=params, timeout=5)
+
+        # Provo përsëri pa shenja diakritike (ë, ç) nëse qyteti nuk u gjet
+        if response.status_code == 404 and params.get("q"):
+            folded = _ascii_fold(params["q"])
+            if folded != params["q"]:
+                params["q"] = folded
+                response = requests.get(self.base_url, params=params, timeout=5)
 
         if response.status_code == 200:
             return response.json()
