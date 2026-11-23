@@ -3,7 +3,6 @@ import re
 import time
 import ipaddress
 import logging
-import unicodedata
 import requests
 
 try:
@@ -14,7 +13,7 @@ except ImportError:
 
 logger = logging.getLogger("FalconAI.WeatherEngine")
 
-API_KEY = os.getenv("OPENWEATHER_KEY", "")
+API_KEY = os.getenv("OPENWEATHER_KEY", "f8a26ced25d514b94ad2d1e61bca80e1")
 DEFAULT_CITY = os.getenv("WEATHER_FALLBACK_CITY", "San Francisco")
 
 SPEAK_ON_SERVER = os.getenv("WEATHER_SPEAK", "false").lower() == "true"
@@ -42,6 +41,28 @@ WEATHER_ICONS = {
     "haze": "🌫️",
 }
 
+WMO_CODE_MAP = {
+    0: ("clear sky", "☀️"),
+    1: ("few clouds", "🌤️"),
+    2: ("scattered clouds", "⛅"),
+    3: ("overcast clouds", "☁️"),
+    45: ("fog", "🌫️"),
+    48: ("fog", "🌫️"),
+    51: ("light intensity drizzle", "🌦️"),
+    53: ("drizzle", "🌦️"),
+    55: ("drizzle", "🌦️"),
+    61: ("light rain", "🌦️"),
+    63: ("moderate rain", "🌧️"),
+    65: ("heavy rain", "🌧️"),
+    71: ("light snow", "🌨️"),
+    73: ("snow", "❄️"),
+    75: ("snow", "❄️"),
+    80: ("light rain", "🌦️"),
+    81: ("moderate rain", "🌧️"),
+    82: ("heavy rain", "🌧️"),
+    95: ("thunderstorm", "⛈️"),
+}
+
 STOPWORDS = {
     "weather", "in", "at", "of", "for", "to", "a", "an", "the", "what", "is",
     "are", "was", "will", "be", "it", "its", "how", "like", "today", "tomorrow",
@@ -49,26 +70,6 @@ STOPWORDS = {
     "update", "temperature", "cold", "hot", "warm", "outside", "tell", "me",
     "about", "give", "show", "please", "do", "does", "i", "need", "check",
     "this", "week", "weekend", "rain", "raining", "sunny", "windy", "cloudy"
-}
-
-# Fjalë shqipe që nuk janë emra qytetesh
-STOPWORDS |= {
-    "moti", "mot", "ne", "në", "sot", "nesër", "nesër", "neser", "si", "është",
-    "eshte", "cili", "cila", "qysh", "po", "ka", "sa", "kohë", "kohe", "koha",
-    "për", "per", "dua", "më", "me", "trego", "tregom", "do", "të", "te",
-    "bëjë", "beje", "kam", "ndonjë", "ndonje", "temperatura", "shi", "diell",
-    "bore", "ftohtë", "ftohte", "nxehtë", "nxehte", "jashtë", "jashte",
-    "tani", "javën", "javen"
-}
-
-# Emra qytetesh që OpenWeather i njeh me emër tjetër
-CITY_ALIASES = {
-    "prishtina": "pristina",
-    "prishtinë": "pristina",
-    "prishtine": "pristina",
-    "tiranë": "tirana",
-    "tirane": "tirana",
-    "shkup": "skopje",
 }
 
 
@@ -89,13 +90,6 @@ def _valid_coords(lat, lon):
     if -90 <= lat <= 90 and -180 <= lon <= 180:
         return lat, lon
     return None, None
-
-
-def _ascii_fold(text):
-    """'Prishtinë' -> 'Prishtine', 'Çakor' -> 'Cakor'."""
-    return "".join(
-        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
-    )
 
 
 class WeatherEngine:
@@ -143,36 +137,95 @@ class WeatherEngine:
     def extract_city(self, query):
         words = re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", (query or "").lower())
         city_words = [w for w in words if w not in STOPWORDS and len(w) > 1]
-        if not city_words:
-            return None
-        city = " ".join(city_words)
-        city = CITY_ALIASES.get(city, city)
-        return city.title()
+        return " ".join(city_words).title() if city_words else None
 
     def fetch_weather(self, city=None, lat=None, lon=None):
-        params = {"appid": self.api_key, "units": "metric", "lang": "en"}
+        if self.api_key:
+            params = {"appid": self.api_key, "units": "metric", "lang": "en"}
+            if lat is not None and lon is not None:
+                params["lat"], params["lon"] = lat, lon
+                target = "coordinates"
+            elif city:
+                params["q"] = city
+                target = f"'{city}'"
+            else:
+                target = "unknown"
 
-        if lat is not None and lon is not None:
-            params["lat"], params["lon"] = lat, lon
-            target = "coordinates"
-        else:
-            params["q"] = city
-            target = f"'{city}'"
-
-        response = requests.get(self.base_url, params=params, timeout=5)
-
-        # Provo përsëri pa shenja diakritike (ë, ç) nëse qyteti nuk u gjet
-        if response.status_code == 404 and params.get("q"):
-            folded = _ascii_fold(params["q"])
-            if folded != params["q"]:
-                params["q"] = folded
+            try:
                 response = requests.get(self.base_url, params=params, timeout=5)
+                if response.status_code == 200:
+                    return response.json()
+                logger.warning(f"[WEATHER] OpenWeather returned HTTP {response.status_code} for {target}")
+            except Exception as e:
+                logger.warning(f"[WEATHER] OpenWeather request failed for {target}: {e}")
 
-        if response.status_code == 200:
-            return response.json()
+        return self.fetch_open_meteo(city=city, lat=lat, lon=lon)
 
-        logger.warning(f"[WEATHER] OpenWeather returned HTTP {response.status_code} for {target}")
-        return None
+    def fetch_open_meteo(self, city=None, lat=None, lon=None):
+        try:
+            resolved_name = city or "Current Location"
+            resolved_country = ""
+
+            if lat is None or lon is None:
+                if not city:
+                    return None
+                geo_resp = requests.get(
+                    "https://geocoding-api.open-meteo.com/v1/search",
+                    params={"name": city, "count": 1, "language": "en", "format": "json"},
+                    timeout=5,
+                )
+                if geo_resp.status_code != 200:
+                    logger.warning(f"[WEATHER] Open-Meteo geocoding HTTP {geo_resp.status_code} for '{city}'")
+                    return None
+                results = (geo_resp.json() or {}).get("results") or []
+                if not results:
+                    logger.warning(f"[WEATHER] Open-Meteo found no location for '{city}'")
+                    return None
+                place = results[0]
+                lat = place.get("latitude")
+                lon = place.get("longitude")
+                resolved_name = place.get("name") or city
+                resolved_country = place.get("country_code") or ""
+
+            wx_resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code",
+                    "wind_speed_unit": "kmh",
+                    "timezone": "auto",
+                },
+                timeout=5,
+            )
+            if wx_resp.status_code != 200:
+                logger.warning(f"[WEATHER] Open-Meteo forecast HTTP {wx_resp.status_code}")
+                return None
+
+            cur = (wx_resp.json() or {}).get("current") or {}
+            if "temperature_2m" not in cur:
+                return None
+
+            code = cur.get("weather_code", 0)
+            desc, icon = WMO_CODE_MAP.get(code, ("clear sky", "🌤️"))
+
+            return {
+                "name": resolved_name,
+                "sys": {"country": resolved_country},
+                "main": {
+                    "temp": cur.get("temperature_2m", 0),
+                    "feels_like": cur.get("apparent_temperature", cur.get("temperature_2m", 0)),
+                    "humidity": cur.get("relative_humidity_2m", 0),
+                },
+                "wind": {
+                    "speed": (cur.get("wind_speed_10m", 0)) / 3.6,
+                },
+                "weather": [{"description": desc}],
+                "_icon_override": icon,
+            }
+        except Exception as e:
+            logger.error(f"[WEATHER] Open-Meteo fallback error: {e}")
+            return None
 
     def build_response(self, data, source="query"):
         city = data.get("name") or "your area"
@@ -184,18 +237,17 @@ class WeatherEngine:
         humidity = data["main"]["humidity"]
         wind = round((data.get("wind") or {}).get("speed", 0) * 3.6, 1)
         desc = data["weather"][0]["description"]
-        icon = WEATHER_ICONS.get(desc, "🌡️")
+        icon = data.get("_icon_override") or WEATHER_ICONS.get(desc, "🌡️")
 
         display = (
-            f"\n{'='*38}\n"
-            f"  {icon}  WEATHER IN {place.upper()}\n"
-            f"{'='*38}\n"
-            f"  🌡️  Temperature : {temp}°C\n"
-            f"  🤔  Feels like  : {feels}°C\n"
-            f"  💧  Humidity    : {humidity}%\n"
-            f"  💨  Wind        : {wind} km/h\n"
-            f"  📋  Condition   : {desc.capitalize()}\n"
-            f"{'='*38}\n"
+            f"### {icon} Weather in {place}\n\n"
+            f"| Metric | Value |\n"
+            f"| :--- | :--- |\n"
+            f"| **Condition** | {desc.capitalize()} |\n"
+            f"| **Temperature** | {temp}°C |\n"
+            f"| **Feels Like** | {feels}°C |\n"
+            f"| **Humidity** | {humidity}% |\n"
+            f"| **Wind** | {wind} km/h |\n"
         )
 
         voice_text = (
@@ -219,6 +271,7 @@ class WeatherEngine:
                 "icon": icon,
                 "location_source": source,
                 "text": display,
+                "markdown_table": display,
                 "voice_text": voice_text,
             },
         }
