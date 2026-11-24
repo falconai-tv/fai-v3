@@ -177,6 +177,8 @@ class _WatchSession:
     session_id: str
     channel_url: str
     channel_name: str = ""
+    program_title: str = ""
+    epg_info: str = ""
     language: str = None
     capture_interval: float = 5.0
     audio_enabled: bool = True
@@ -226,7 +228,8 @@ class WatchCompanionEngine:
 
     def start_session(self, session_id: str, channel_url: str, channel_name: str = "",
                       capture_interval: float = 5.0, language: str = None,
-                      enable_audio: bool = True, enable_vision: bool = True) -> dict:
+                      enable_audio: bool = True, enable_vision: bool = True,
+                      program_title: str = "", epg_info: str = "") -> dict:
         self.stop_session(session_id)
 
         has_key = bool(os.getenv("GROQ_API_KEY"))
@@ -237,6 +240,8 @@ class WatchCompanionEngine:
             session_id=session_id,
             channel_url=channel_url,
             channel_name=channel_name,
+            program_title=program_title,
+            epg_info=epg_info,
             language=language,
             capture_interval=max(2.0, float(capture_interval)),
             audio_enabled=audio_on,
@@ -271,8 +276,21 @@ class WatchCompanionEngine:
             "status": "started",
             "session_id": session_id,
             "channel_name": channel_name,
+            "program_title": program_title,
             "features": {"ocr": self._ocr_ok, "audio": audio_on, "vision": vision_on},
         }
+
+    def update_program_context(self, session_id: str, program_title: str = None, epg_info: str = None):
+        with self._sessions_lock:
+            session = self._sessions.get(session_id)
+        if not session:
+            return
+        with session.lock:
+            if program_title is not None:
+                session.program_title = program_title
+            if epg_info is not None:
+                session.epg_info = epg_info
+            session.last_activity = time.time()
 
     def stop_session(self, session_id: str) -> dict:
         with self._sessions_lock:
@@ -319,6 +337,7 @@ class WatchCompanionEngine:
                 "status": "active",
                 "session_id": session_id,
                 "channel_name": session.channel_name,
+                "program_title": session.program_title,
                 "video_ok": session.video_ok,
                 "audio_ok": session.audio_ok,
                 "audio_enabled": session.audio_enabled,
@@ -449,7 +468,7 @@ class WatchCompanionEngine:
                 buffer = bytearray()
 
                 while not s.stop_event.is_set():
-                    chunk = proc.stdout.read1(65536)  # returns whatever is available
+                    chunk = proc.stdout.read1(65536)
                     if not chunk:
                         break
                     buffer.extend(chunk)
@@ -875,20 +894,35 @@ class WatchCompanionEngine:
         visual = self._get_visual_context(session, image_b64)
         context, sources = self._build_context(session, visual)
 
+        with session.lock:
+            prog_title = session.program_title
+            prog_info = session.epg_info
+
+        epg_parts = []
+        if prog_title:
+            epg_parts.append(f"Current program/show: {prog_title}")
+            sources.append("epg_title")
+        if prog_info:
+            epg_parts.append(f"Program details: {prog_info}")
+            sources.append("epg_info")
+
+        epg_line = (" | ".join(epg_parts) + "\n") if epg_parts else ""
         header = f"The user is watching '{session.channel_name or 'a live channel'}' right now."
 
-        if context:
+        if context or epg_line:
             augmented = (
-                f"[{header}\n{context}\n"
+                f"[{header}\n{epg_line}{context}\n"
                 f"Use this only where it is clearly relevant. It may contain recognition noise. "
                 f"Never mention transcripts, OCR, or captured text; answer naturally as if watching along. "
+                f"Answer in the same language as the user's question. "
                 f"If the context does not answer the question, say you can't tell from what's on right now.]\n"
                 f"The user asks: {question}"
             )
         else:
             augmented = (
                 f"[{header} Nothing readable or audible has been captured yet, so you cannot know "
-                f"what is on screen. Say so briefly if the question depends on it.]\n"
+                f"what is on screen. Answer in the same language as the user's question, and say briefly "
+                f"if you can't tell from what's on right now.]\n"
                 f"The user asks: {question}"
             )
 
@@ -911,7 +945,13 @@ if __name__ == "__main__":
             pass
 
     engine = WatchCompanionEngine(_FakeConversationEngine())
-    print(engine.start_session("test_session", "https://example.com/fake-stream.m3u8", "Test Channel", language="en"))
+    print(engine.start_session(
+        "test_session",
+        "https://example.com/fake-stream.m3u8",
+        "Test Channel",
+        language="en",
+        program_title="Evening News",
+    ))
     time.sleep(2)
     print(engine.get_status("test_session"))
     print(engine.ask("test_session", "test_user", "what's happening right now?"))
