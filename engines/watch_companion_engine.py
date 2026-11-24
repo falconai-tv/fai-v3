@@ -163,7 +163,7 @@ def _pick_low_variant(url: str) -> str:
         if not candidates:
             return url
 
-        candidates.sort()  # video variants first, then lowest bandwidth
+        candidates.sort()
         chosen = candidates[0][2]
         logger.info(f"[WATCH] Using low variant: {chosen}")
         return chosen
@@ -240,8 +240,8 @@ class WatchCompanionEngine:
             session_id=session_id,
             channel_url=channel_url,
             channel_name=channel_name,
-            program_title=program_title,
-            epg_info=epg_info,
+            program_title=program_title or "",
+            epg_info=epg_info or "",
             language=language,
             capture_interval=max(2.0, float(capture_interval)),
             audio_enabled=audio_on,
@@ -261,7 +261,6 @@ class WatchCompanionEngine:
         with self._sessions_lock:
             self._sessions[session_id] = session
 
-        # reset history BEFORE workers start, using the same key ask() uses
         self._reset_watch_history(session_id)
 
         for t in session.threads:
@@ -269,7 +268,7 @@ class WatchCompanionEngine:
 
         logger.info(
             f"[WATCH] Started '{session_id}' on '{channel_name}' "
-            f"audio={audio_on} vision={vision_on} ocr={self._ocr_ok}"
+            f"program='{program_title}' audio={audio_on} vision={vision_on} ocr={self._ocr_ok}"
         )
 
         return {
@@ -277,6 +276,7 @@ class WatchCompanionEngine:
             "session_id": session_id,
             "channel_name": channel_name,
             "program_title": program_title,
+            "epg_info": epg_info,
             "features": {"ocr": self._ocr_ok, "audio": audio_on, "vision": vision_on},
         }
 
@@ -286,9 +286,9 @@ class WatchCompanionEngine:
         if not session:
             return
         with session.lock:
-            if program_title is not None:
+            if program_title is not None and program_title != "":
                 session.program_title = program_title
-            if epg_info is not None:
+            if epg_info is not None and epg_info != "":
                 session.epg_info = epg_info
             session.last_activity = time.time()
 
@@ -338,10 +338,12 @@ class WatchCompanionEngine:
                 "session_id": session_id,
                 "channel_name": session.channel_name,
                 "program_title": session.program_title,
+                "epg_info": session.epg_info,
                 "video_ok": session.video_ok,
                 "audio_ok": session.audio_ok,
                 "audio_enabled": session.audio_enabled,
                 "vision_enabled": session.vision_enabled,
+                "vision_model": VISION_MODEL,
                 "ocr_enabled": self._ocr_ok,
                 "ffmpeg": FFMPEG or None,
                 "has_frame": session.latest_jpeg is not None,
@@ -362,11 +364,10 @@ class WatchCompanionEngine:
                 self.stop_session(sid)
 
     # ------------------------------------------------------------------
-    # Debug (diagnostics only - remove the route when done)
+    # Debug
     # ------------------------------------------------------------------
 
     def debug_grab(self, url: str, timeout: int = 25, use_low_variant: bool = True) -> dict:
-        """Isolated test: grab 1 frame from the stream and return ffmpeg's stderr tail."""
         if not FFMPEG:
             return {"error": "ffmpeg not found"}
 
@@ -414,7 +415,6 @@ class WatchCompanionEngine:
             pass
 
     def _publish_frame(self, s: _WatchSession, frame):
-        """Store a downscaled JPEG for vision and hand the frame to OCR."""
         try:
             self._store_jpeg(s, frame)
         except Exception as e:
@@ -774,14 +774,17 @@ class WatchCompanionEngine:
                 GROQ_CHAT_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
-                timeout=20,
+                timeout=25,
             )
             if r.status_code != 200:
-                logger.warning(f"[WATCH] Vision error {r.status_code}: {r.text[:200]}")
+                logger.warning(f"[WATCH] Vision error {r.status_code} ({VISION_MODEL}): {r.text[:200]}")
                 return ""
-            return (r.json()["choices"][0]["message"]["content"] or "").strip()
+            desc = (r.json()["choices"][0]["message"]["content"] or "").strip()
+            if desc:
+                logger.info(f"[WATCH] Vision description ({VISION_MODEL}): {desc[:100]}")
+            return desc
         except Exception as e:
-            logger.warning(f"[WATCH] Vision request failed: {e}")
+            logger.warning(f"[WATCH] Vision request failed ({VISION_MODEL}): {e}")
             return ""
 
     def _get_visual_context(self, s: _WatchSession, image_b64: str) -> str:
@@ -805,7 +808,7 @@ class WatchCompanionEngine:
         now = time.time()
         if cached and now - cached_time < VISION_CACHE_SECONDS:
             return cached
-        if not jpeg or now - jpeg_time > 30:
+        if not jpeg or now - jpeg_time > 45:
             return ""
 
         description = self._describe_image(jpeg)
@@ -875,7 +878,8 @@ class WatchCompanionEngine:
                     return
             time.sleep(0.3)
 
-    def ask(self, session_id: str, user_id: str, question: str, image_b64: str = None) -> dict:
+    def ask(self, session_id: str, user_id: str, question: str, image_b64: str = None,
+            program_title: str = None, epg_info: str = None) -> dict:
         with self._sessions_lock:
             session = self._sessions.get(session_id)
 
@@ -885,6 +889,9 @@ class WatchCompanionEngine:
                 "voice": "I'm not currently watching anything with you.",
                 "meta": {"type": "watch_companion", "error": "no_active_session"},
             }
+
+        if program_title is not None or epg_info is not None:
+            self.update_program_context(session_id, program_title=program_title, epg_info=epg_info)
 
         session.last_activity = time.time()
 
@@ -951,6 +958,7 @@ if __name__ == "__main__":
         "Test Channel",
         language="en",
         program_title="Evening News",
+        epg_info="Live market & global briefing",
     ))
     time.sleep(2)
     print(engine.get_status("test_session"))
