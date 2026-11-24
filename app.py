@@ -2,6 +2,19 @@ import os
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from core.smart_channel_finder import SmartChannelFinder
+
+smart_channel_finder = SmartChannelFinder()
+
+
+@app.route('/channel/find', methods=['POST'])
+def handle_channel_find():
+    data = request.get_json(silent=True) or {}
+    query = (data.get('query') or data.get('text') or '').strip()
+    if not query:
+        return jsonify({"status": "error", "message": "Missing 'query'"}), 400
+    res = smart_channel_finder.find(query)
+    return jsonify(res), 200
 
 logging.basicConfig(
     level=logging.INFO,
