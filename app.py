@@ -53,6 +53,8 @@ def handle_watch_start():
     language = data.get('language', None)
     enable_audio = data.get('enable_audio', True)
     enable_vision = data.get('enable_vision', True)
+    program_title = data.get('program_title', '')
+    epg_info = data.get('epg_info', '')
 
     if not session_id or not channel_url:
         return jsonify({
@@ -67,7 +69,9 @@ def handle_watch_start():
         capture_interval=capture_interval,
         language=language,
         enable_audio=enable_audio,
-        enable_vision=enable_vision
+        enable_vision=enable_vision,
+        program_title=program_title,
+        epg_info=epg_info,
     )
 
     return jsonify(res), 200
@@ -85,6 +89,8 @@ def handle_watch_ask():
 
     question = data.get('text') or data.get('question')
     image_b64 = data.get('image_b64')
+    program_title = data.get('program_title')
+    epg_info = data.get('epg_info')
 
     if not session_id or not question:
         return jsonify({
@@ -96,7 +102,9 @@ def handle_watch_ask():
         session_id=session_id,
         user_id=user_id,
         question=question,
-        image_b64=image_b64
+        image_b64=image_b64,
+        program_title=program_title,
+        epg_info=epg_info,
     )
 
     return jsonify(result), 200
