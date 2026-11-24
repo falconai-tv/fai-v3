@@ -39,12 +39,23 @@ CONCEPT_EXPANSIONS = {
 MEDIA_POSITIVE_TERMS = {
     "film", "movie", "documentary", "directed", "director", "starring",
     "screenplay", "written", "released", "drama", "thriller", "comedy",
-    "actor", "actress", "cinema", "biopic", "chronicles", "follows"
+    "actor", "actress", "cinema", "biopic", "chronicles", "follows", "character"
 }
 
 COMPANY_PENALTY_TERMS = {
     "company", "headquartered", "founded", "startup", "software",
-    "platform", "website", "app", "valuation", "venture", "ceo"
+    "platform", "website", "app", "valuation", "venture", "ceo", "shareholders"
+}
+
+GENERIC_CONCEPT_TITLES = {
+    "organizational founder",
+    "founder",
+    "entrepreneurship",
+    "venture capital",
+    "stock market",
+    "financial market",
+    "market trader",
+    "insider trading",
 }
 
 NOISE_TITLES = {
@@ -203,11 +214,18 @@ class TubiDescriptionFinder:
                     continue
 
                 is_explicit_media_page = bool(
-                    re.search(r"\((?:[^)]*\b)?(?:film|movie|documentary)(?:\b[^)]*)?\)\s*$", raw_title, re.IGNORECASE)
+                    re.search(
+                        r"\((?:[^)]*\b)?(?:film|movie|documentary)(?:\b[^)]*)?\)\s*$",
+                        raw_title,
+                        re.IGNORECASE,
+                    )
                 )
                 clean_title = (
                     re.sub(r"\s*\([^)]*\)\s*$", "", raw_title).strip() or raw_title
                 )
+
+                if clean_title.lower() in GENERIC_CONCEPT_TITLES and not is_explicit_media_page:
+                    continue
 
                 candidates.append({
                     "title": clean_title,
@@ -242,13 +260,23 @@ class TubiDescriptionFinder:
         if desc_hits == 0 and expanded_hits == 0:
             return 0.0, []
 
+        # Nëse pyetja ka fjalë specifike (psh. stock, crash, startup, silicon) dhe asnjëra nuk del në përshkrim,
+        # ul pikët që përputhje periferike (si "market trader" te një film tjetër) të mos fitojnë.
+        specific_tokens = {w for w in q_tokens if len(w) >= 5}
+        if specific_tokens and not (specific_tokens & combined_words):
+            return 0.0, []
+
         media_hits = len(combined_words & MEDIA_POSITIVE_TERMS)
         company_hits = len(combined_words & COMPANY_PENALTY_TERMS)
 
         multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
         specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched)
-        media_bonus = (3.0 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
-        company_penalty = company_hits * 2.2 if media_hits == 0 and not candidate.get("is_explicit_media_page") else company_hits * 0.8
+        media_bonus = (3.5 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
+        company_penalty = (
+            company_hits * 2.5
+            if media_hits == 0 and not candidate.get("is_explicit_media_page")
+            else company_hits * 0.8
+        )
 
         score = (
             (desc_hits * 2.5)
