@@ -25,6 +25,28 @@ STOP_WORDS = {
     "trying", "get", "back"
 }
 
+CONCEPT_EXPANSIONS = {
+    "internal": ["grief", "emotional", "guilt", "drama", "psychological"],
+    "tragedy": ["grief", "loss", "mourning", "drama"],
+    "afterward": ["aftermath", "grief", "drama"],
+    "isolated": ["alone", "solitude", "survival", "drama"],
+    "lonely": ["alone", "solitude", "melancholy", "drama"],
+    "haunting": ["psychological", "mystery", "thriller", "drama"],
+    "mind": ["psychological", "memory", "mystery"],
+    "future": ["sci-fi", "science", "technology", "space"],
+}
+
+MEDIA_POSITIVE_TERMS = {
+    "film", "movie", "documentary", "directed", "director", "starring",
+    "screenplay", "written", "released", "drama", "thriller", "comedy",
+    "actor", "actress", "cinema", "biopic", "chronicles", "follows"
+}
+
+COMPANY_PENALTY_TERMS = {
+    "company", "headquartered", "founded", "startup", "software",
+    "platform", "website", "app", "valuation", "venture", "ceo"
+}
+
 NOISE_TITLES = {
     "eagles vs. cowboys",
     "eagles vs cowboys",
@@ -97,6 +119,21 @@ class TubiDescriptionFinder:
         scored.sort(key=lambda x: x[1], reverse=True)
         return [t for t, _ in scored[:max_terms]]
 
+    def _expand_abstract_terms(self, keywords: list[str], query: str) -> list[str]:
+        q_tokens = set(re.findall(r"\b[a-z]{3,}\b", (query or "").lower()))
+        seed_words = set(keywords) | q_tokens
+        expanded = list(keywords)
+        seen = set(expanded)
+
+        for word in seed_words:
+            for extra in CONCEPT_EXPANSIONS.get(word, []):
+                if extra not in seen and extra not in STOP_WORDS:
+                    seen.add(extra)
+                    expanded.append(extra)
+                if len(expanded) >= 7:
+                    return expanded
+        return expanded
+
     def _iter_media_items(self, block):
         if isinstance(block, list):
             for item in block:
@@ -138,37 +175,46 @@ class TubiDescriptionFinder:
                 logger.debug("Tubi candidate fetch skipped for '%s': %s", term, exc)
         return candidates
 
-    def _search_open_web_movie_descriptions(self, keywords: list[str]) -> list[dict]:
-        """Kërkon dinamikisht në Wikipedia API për filma që përputhen me përshkrimin."""
-        if not keywords:
+    def _search_open_web_movie_descriptions(self, search_terms: list[str]) -> list[dict]:
+        """Kërkon dinamikisht në Wikipedia API për filma ose dokumentarë që përputhen me përshkrimin."""
+        if not search_terms:
             return []
 
-        search_query = " ".join(keywords[:4]) + " film"
+        core_terms = " ".join(search_terms[:4])
+        search_query = f"({core_terms}) (film OR movie OR documentary)"
         api_url = (
             "https://en.wikipedia.org/w/api.php?action=query&list=search"
-            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=8&format=json"
+            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=10&format=json"
         )
         candidates = []
 
         try:
-            raw_json = self._fetch_text(api_url, max_bytes=600_000)
+            raw_json = self._fetch_text(api_url, max_bytes=700_000)
             payload = json.loads(raw_json)
             entries = (payload.get("query") or {}).get("search") or []
 
             for entry in entries:
-                title = html.unescape(str(entry.get("title") or "")).strip()
+                raw_title = html.unescape(str(entry.get("title") or "")).strip()
                 snippet = html.unescape(re.sub(r"<.*?>", " ", str(entry.get("snippet") or ""))).strip()
                 snippet = re.sub(r"\s+", " ", snippet)
-                if not title or not snippet:
+                if not raw_title or not snippet:
                     continue
-                if any(bad in title.lower() for bad in ("list of ", "category:", "wikipedia:")):
+                if any(bad in raw_title.lower() for bad in ("list of ", "category:", "wikipedia:")):
                     continue
-                clean_title = re.sub(r"\s*\([^)]*film[^)]*\)\s*$", "", title, flags=re.IGNORECASE).strip() or title
+
+                is_explicit_media_page = bool(
+                    re.search(r"\((?:[^)]*\b)?(?:film|movie|documentary)(?:\b[^)]*)?\)\s*$", raw_title, re.IGNORECASE)
+                )
+                clean_title = (
+                    re.sub(r"\s*\([^)]*\)\s*$", "", raw_title).strip() or raw_title
+                )
+
                 candidates.append({
                     "title": clean_title,
                     "description": snippet,
                     "url": f"https://tubitv.com/search/{urllib.parse.quote(clean_title)}",
                     "source": "Live Open Web / Wikipedia",
+                    "is_explicit_media_page": is_explicit_media_page,
                 })
         except Exception as exc:
             logger.warning("Open web movie search failed for '%s': %s", search_query, exc)
@@ -176,26 +222,42 @@ class TubiDescriptionFinder:
         return candidates
 
     def _score_description_match(
-        self, query: str, keywords: list[str], candidate: dict
+        self, query: str, expanded_terms: list[str], candidate: dict
     ) -> tuple[float, list[str]]:
         q_tokens = {
             w for w in re.findall(r"\b[a-z]{3,}\b", (query or "").lower())
             if w not in STOP_WORDS
         }
+        all_target_tokens = q_tokens | set(expanded_terms)
+
         desc = (candidate.get("description") or "").lower()
         title = (candidate.get("title") or "").lower()
         combined = f"{title} {desc}"
+        combined_words = set(re.findall(r"\b[a-z]{3,}\b", combined))
 
-        matched = sorted(w for w in q_tokens if w in combined)
+        matched = sorted(w for w in all_target_tokens if w in combined_words)
         desc_hits = sum(1 for w in matched if w in desc)
-        kw_hits = sum(1 for kw in keywords if kw in desc)
+        expanded_hits = sum(1 for term in expanded_terms if term in desc)
 
-        if desc_hits == 0 and kw_hits == 0:
+        if desc_hits == 0 and expanded_hits == 0:
             return 0.0, []
+
+        media_hits = len(combined_words & MEDIA_POSITIVE_TERMS)
+        company_hits = len(combined_words & COMPANY_PENALTY_TERMS)
 
         multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
         specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched)
-        score = (desc_hits * 2.5) + (kw_hits * 1.5) + multi_match_bonus + specificity_bonus
+        media_bonus = (3.0 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
+        company_penalty = company_hits * 2.2 if media_hits == 0 and not candidate.get("is_explicit_media_page") else company_hits * 0.8
+
+        score = (
+            (desc_hits * 2.5)
+            + (expanded_hits * 1.4)
+            + multi_match_bonus
+            + specificity_bonus
+            + media_bonus
+            - company_penalty
+        )
 
         if score <= 0:
             return 0.0, []
@@ -204,8 +266,10 @@ class TubiDescriptionFinder:
 
     def find_by_description(self, description_query: str, top_k: int = 3) -> dict:
         keywords = self.extract_keywords(description_query, max_terms=5)
-        candidates = self._search_tubi_candidates(keywords)
-        candidates.extend(self._search_open_web_movie_descriptions(keywords))
+        expanded_terms = self._expand_abstract_terms(keywords, description_query)
+
+        candidates = self._search_tubi_candidates(expanded_terms)
+        candidates.extend(self._search_open_web_movie_descriptions(expanded_terms))
 
         seen_titles = set()
         scored = []
@@ -214,7 +278,7 @@ class TubiDescriptionFinder:
             norm_title = cand["title"].lower()
             if norm_title in seen_titles:
                 continue
-            score, matched_words = self._score_description_match(description_query, keywords, cand)
+            score, matched_words = self._score_description_match(description_query, expanded_terms, cand)
             if score <= 0:
                 continue
             seen_titles.add(norm_title)
