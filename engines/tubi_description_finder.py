@@ -41,18 +41,21 @@ CONCEPT_EXPANSIONS = {
     "future": ["sci-fi", "science", "technology", "space"],
     "crash": ["recession", "wall", "finance", "crisis", "bank"],
     "stock": ["wall", "finance", "trader", "trading", "shares"],
+    "woods": ["forest", "cabin", "remote", "thriller"],
+    "thriller": ["suspense", "horror", "mystery", "psychological"],
 }
 
 MEDIA_POSITIVE_TERMS = {
     "film", "movie", "documentary", "directed", "director", "starring",
     "screenplay", "written", "released", "drama", "thriller", "comedy",
-    "actor", "actress", "cinema", "biopic", "chronicles", "follows", "character"
+    "actor", "actress", "cinema", "biopic", "chronicles", "follows", "character",
+    "horror", "suspense", "mystery"
 }
 
 COMPANY_PENALTY_TERMS = {
     "company", "headquartered", "founded", "startup", "software",
     "platform", "website", "app", "valuation", "venture", "ceo", "shareholders",
-    "investors", "accelerator", "co-founders"
+    "investors", "accelerator", "co-founders", "mentors"
 }
 
 GENERIC_CONCEPT_TITLES = {
@@ -135,7 +138,6 @@ class TubiDescriptionFinder:
             if tok in STOP_WORDS or tok in seen:
                 continue
             seen.add(tok)
-            # Fjalët specifike (jo të përgjithshme si "market" ose "building") marrin prioritet më të lartë
             rank = len(tok) + (4.0 if tok not in BROAD_CONTEXT_WORDS else 0.0)
             scored.append((tok, rank))
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -197,58 +199,65 @@ class TubiDescriptionFinder:
                 logger.debug("Tubi candidate fetch skipped for '%s': %s", term, exc)
         return candidates
 
+    def _query_wikipedia_entries(self, search_query: str) -> list[dict]:
+        api_url = (
+            "https://en.wikipedia.org/w/api.php?action=query&list=search"
+            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=10&format=json"
+        )
+        raw_json = self._fetch_text(api_url, max_bytes=700_000)
+        payload = json.loads(raw_json)
+        entries = (payload.get("query") or {}).get("search") or []
+        results = []
+
+        for entry in entries:
+            raw_title = html.unescape(str(entry.get("title") or "")).strip()
+            snippet = html.unescape(re.sub(r"<.*?>", " ", str(entry.get("snippet") or ""))).strip()
+            snippet = re.sub(r"\s+", " ", snippet)
+            if not raw_title or not snippet:
+                continue
+            if any(bad in raw_title.lower() for bad in ("list of ", "category:", "wikipedia:")):
+                continue
+
+            is_explicit_media_page = bool(
+                re.search(
+                    r"\((?:[^)]*\b)?(?:film|movie|documentary)(?:\b[^)]*)?\)\s*$",
+                    raw_title,
+                    re.IGNORECASE,
+                )
+            )
+            clean_title = (
+                re.sub(r"\s*\([^)]*\)\s*$", "", raw_title).strip() or raw_title
+            )
+
+            if clean_title.lower() in GENERIC_CONCEPT_TITLES and not is_explicit_media_page:
+                continue
+
+            results.append({
+                "title": clean_title,
+                "description": snippet,
+                "url": f"https://tubitv.com/search/{urllib.parse.quote(clean_title)}",
+                "source": "Live Open Web / Wikipedia",
+                "is_explicit_media_page": is_explicit_media_page,
+            })
+        return results
+
     def _search_open_web_movie_descriptions(self, search_terms: list[str]) -> list[dict]:
         """Kërkon dinamikisht në Wikipedia API për filma ose dokumentarë që përputhen me përshkrimin."""
         if not search_terms:
             return []
 
         core_terms = " ".join(search_terms[:4])
-        search_query = f"({core_terms}) (film OR movie OR documentary)"
-        api_url = (
-            "https://en.wikipedia.org/w/api.php?action=query&list=search"
-            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=10&format=json"
-        )
-        candidates = []
+        primary_query = f"({core_terms}) (film OR movie OR documentary)"
 
         try:
-            raw_json = self._fetch_text(api_url, max_bytes=700_000)
-            payload = json.loads(raw_json)
-            entries = (payload.get("query") or {}).get("search") or []
-
-            for entry in entries:
-                raw_title = html.unescape(str(entry.get("title") or "")).strip()
-                snippet = html.unescape(re.sub(r"<.*?>", " ", str(entry.get("snippet") or ""))).strip()
-                snippet = re.sub(r"\s+", " ", snippet)
-                if not raw_title or not snippet:
-                    continue
-                if any(bad in raw_title.lower() for bad in ("list of ", "category:", "wikipedia:")):
-                    continue
-
-                is_explicit_media_page = bool(
-                    re.search(
-                        r"\((?:[^)]*\b)?(?:film|movie|documentary)(?:\b[^)]*)?\)\s*$",
-                        raw_title,
-                        re.IGNORECASE,
-                    )
-                )
-                clean_title = (
-                    re.sub(r"\s*\([^)]*\)\s*$", "", raw_title).strip() or raw_title
-                )
-
-                if clean_title.lower() in GENERIC_CONCEPT_TITLES and not is_explicit_media_page:
-                    continue
-
-                candidates.append({
-                    "title": clean_title,
-                    "description": snippet,
-                    "url": f"https://tubitv.com/search/{urllib.parse.quote(clean_title)}",
-                    "source": "Live Open Web / Wikipedia",
-                    "is_explicit_media_page": is_explicit_media_page,
-                })
+            candidates = self._query_wikipedia_entries(primary_query)
+            if not candidates and len(search_terms) >= 2:
+                fallback_terms = " ".join(search_terms[:2])
+                candidates = self._query_wikipedia_entries(f"({fallback_terms}) (film OR movie)")
+            return candidates
         except Exception as exc:
-            logger.warning("Open web movie search failed for '%s': %s", search_query, exc)
-
-        return candidates
+            logger.warning("Open web movie search failed for '%s': %s", primary_query, exc)
+            return []
 
     def _score_description_match(
         self, query: str, expanded_terms: list[str], candidate: dict
@@ -279,6 +288,14 @@ class TubiDescriptionFinder:
         company_hits = len(combined_words & COMPANY_PENALTY_TERMS)
         broad_only_hits = sum(1 for w in matched if w in BROAD_CONTEXT_WORDS)
 
+        # Penalizo emra personash/biografi që nuk kanë sinjale filmi/dokumentari
+        looks_like_person_bio = (
+            not candidate.get("is_explicit_media_page")
+            and media_hits == 0
+            and len(title.split()) in (2, 3)
+            and bool(re.match(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$", candidate.get("title") or ""))
+        )
+
         multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
         specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched if w not in BROAD_CONTEXT_WORDS)
         media_bonus = (3.5 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
@@ -288,6 +305,7 @@ class TubiDescriptionFinder:
             else company_hits * 1.0
         )
         broad_penalty = broad_only_hits * 1.0
+        bio_penalty = 8.0 if looks_like_person_bio else 0.0
 
         score = (
             (desc_hits * 2.5)
@@ -297,6 +315,7 @@ class TubiDescriptionFinder:
             + media_bonus
             - company_penalty
             - broad_penalty
+            - bio_penalty
         )
 
         if score <= 0:
