@@ -75,6 +75,7 @@ CURATED_FALLBACKS = [
         "url": "https://tubitv.com/search/Manchester%20by%20the%20Sea",
         "match_score": 0.85,
         "matched_via_term": "internal grief and loss",
+        "source": "Curated Fallback",
     },
     {
         "title": "Arrival",
@@ -82,6 +83,7 @@ CURATED_FALLBACKS = [
         "url": "https://tubitv.com/search/Arrival",
         "match_score": 0.80,
         "matched_via_term": "existential philosophical drama",
+        "source": "Curated Fallback",
     },
     {
         "title": "Blade Runner 2049",
@@ -89,8 +91,13 @@ CURATED_FALLBACKS = [
         "url": "https://tubitv.com/search/Blade%20Runner%202049",
         "match_score": 0.78,
         "matched_via_term": "slow atmospheric cinema",
+        "source": "Curated Fallback",
     },
 ]
+
+_TERM_SKIP_WORDS = {
+    "and", "the", "of", "in", "to", "a", "an", "for", "with", "style", "story"
+}
 
 
 def _embeddings_enabled() -> bool:
@@ -152,11 +159,9 @@ def expand_query_to_search_terms(query: str, top_k: int = 3):
 
     if model is not None and tax_vecs is not None:
         try:
-            import numpy as np
-
             query_vec = model.encode([query], normalize_embeddings=True)[0]
             sims = _cosine_sim_matrix(query_vec, tax_vecs)
-            top_indices = np.argsort(sims)[::-1][:top_k]
+            top_indices = sorted(range(len(sims)), key=lambda idx: float(sims[idx]), reverse=True)[:top_k]
             terms = [(TAXONOMY[i], float(sims[i])) for i in top_indices]
             logger.info("[SEMANTIC] Query '%s' -> concrete terms: %s", query, terms)
             return terms
@@ -166,6 +171,14 @@ def expand_query_to_search_terms(query: str, top_k: int = 3):
     terms = _keyword_taxonomy_fallback(query, top_k=top_k)
     logger.info("[SEMANTIC] Query '%s' -> lightweight terms: %s", query, terms)
     return terms
+
+
+def _compact_tubi_term(term: str) -> str:
+    words = [
+        w for w in re.findall(r"\b[a-z]{3,}\b", (term or "").lower())
+        if w not in _TERM_SKIP_WORDS
+    ]
+    return " ".join(words[:2]) or "drama"
 
 
 class TubiJSONLDParser(HTMLParser):
@@ -221,8 +234,9 @@ def _iter_jsonld_items(block):
             yield block
 
 
-def _scrape_tubi(term: str, timeout: int = 5):
-    encoded = urllib.parse.quote(term)
+def _scrape_tubi(term: str, timeout: int = 4):
+    compact = _compact_tubi_term(term)
+    encoded = urllib.parse.quote(compact)
     url = f"https://tubitv.com/search/{encoded}"
     candidates = []
 
@@ -247,6 +261,7 @@ def _scrape_tubi(term: str, timeout: int = 5):
                     "description": html.unescape(str(item.get("description") or "")).strip(),
                     "url": link,
                     "matched_term": term,
+                    "source": "Tubi JSON-LD",
                 })
 
         if not candidates:
@@ -260,10 +275,11 @@ def _scrape_tubi(term: str, timeout: int = 5):
                         "description": "",
                         "url": f"https://tubitv.com{link}",
                         "matched_term": term,
+                        "source": "Tubi DOM",
                     })
 
     except Exception as exc:
-        logger.warning("[SEMANTIC] Scrape failed for '%s': %s", term, exc)
+        logger.warning("[SEMANTIC] Scrape failed for '%s' (%s): %s", term, compact, exc)
 
     return candidates
 
@@ -275,7 +291,7 @@ def _scrape_all_terms(terms, per_term_limit=8):
         futures = {executor.submit(_scrape_tubi, term): term for term, _ in terms}
         for future in as_completed(futures):
             try:
-                results = future.result(timeout=7)
+                results = future.result(timeout=6)
                 all_candidates.extend(results[:per_term_limit])
             except Exception as exc:
                 logger.warning("[SEMANTIC] Future failed: %s", exc)
@@ -337,6 +353,7 @@ class SemanticMovieEngine:
                         "url": cand["url"],
                         "match_score": round(float(score), 3),
                         "matched_via_term": cand["matched_term"],
+                        "source": cand.get("source", "Tubi"),
                     }
                     for cand, score in ranked[:top_k]
                 ]
@@ -360,6 +377,7 @@ class SemanticMovieEngine:
                 "url": cand["url"],
                 "match_score": score,
                 "matched_via_term": cand["matched_term"],
+                "source": cand.get("source", "Tubi"),
             }
             for cand, score in ranked_lex[:top_k]
         ]
