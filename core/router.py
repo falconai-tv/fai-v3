@@ -1,19 +1,37 @@
 import os
 import re
 
+try:
+    from engines.tubi_description_finder import TubiDescriptionFinder
+except ImportError:
+    TubiDescriptionFinder = None
 
 def _has_word(text: str, words) -> bool:
-    """True nëse teksti përmban një nga fjalët si fjalë të plotë
-    (që 'moti' mos kapet te 'motivation', ose 'war' te 'warm'/'Warsaw')."""
     pattern = r"\b(?:" + "|".join(re.escape(w) for w in words) + r")\b"
     return re.search(pattern, text, re.IGNORECASE) is not None
-
 
 WEATHER_WORDS = ["weather", "moti", "forecast", "temperatura"]
 
 MOVIE_WORDS = [
     "movie", "movies", "film", "films", "watch something", "watch a movie",
     "watch a film", "watch films", "recommend a movie", "find a movie"
+]
+
+PLOT_DESCRIPTION_PHRASES = [
+    "a movie where",
+    "a film where",
+    "movie about",
+    "film about",
+    "don't remember the name",
+    "dont remember the name",
+    "forgot the title",
+    "forget the title",
+    "what movie is",
+    "what film is",
+    "looking for a movie",
+    "looking for a film",
+    "sits with you",
+    "days afterward",
 ]
 
 MUSIC_WORDS = ["play", "këngë", "kenge", "song", "songs", "music", "lësho", "lesho", "luaj"]
@@ -24,14 +42,86 @@ NEWS_WORDS = [
 ]
 
 
+def _is_plot_description(cleaned: str) -> bool:
+    if any(phrase in cleaned for phrase in PLOT_DESCRIPTION_PHRASES):
+        return True
+    has_media = _has_word(cleaned, ["movie", "movies", "film", "films", "cinema"])
+    has_clue = _has_word(
+        cleaned,
+        ["where", "about", "plot", "scene", "forgot", "remember", "blind", "detective", "island", "amnesia", "tragedy", "internal"]
+    )
+    return has_media and has_clue
+
+
 class Router:
-    def __init__(self, conversation_engine=None, web_engine=None, library_engine=None, music_engine=None, weather_engine=None, sports_engine=None, **kwargs):
+    def __init__(
+        self,
+        conversation_engine=None,
+        web_engine=None,
+        library_engine=None,
+        music_engine=None,
+        weather_engine=None,
+        sports_engine=None,
+        tubi_description_finder=None,
+        **kwargs
+    ):
         self.conversation_engine = conversation_engine
         self.web_engine = web_engine
         self.library_engine = library_engine
         self.music_engine = music_engine
         self.weather_engine = weather_engine
         self.sports_engine = sports_engine
+        if tubi_description_finder is not None:
+            self.tubi_description_finder = tubi_description_finder
+        elif TubiDescriptionFinder is not None:
+            try:
+                self.tubi_description_finder = TubiDescriptionFinder(timeout=4)
+            except Exception:
+                self.tubi_description_finder = None
+        else:
+            self.tubi_description_finder = None
+
+    def _search_tubi_by_description(self, text: str) -> dict | None:
+        if not self.tubi_description_finder or not hasattr(self.tubi_description_finder, "find_by_description"):
+            return None
+        try:
+            found = self.tubi_description_finder.find_by_description(text, top_k=3)
+            matches = found.get("results") or []
+            if not matches:
+                return {
+                    "text": "I couldn't find a matching movie on Tubi from that description. Try sharing more plot details.",
+                    "voice": "I couldn't find a matching movie on Tubi from that description.",
+                    "data": {"results": [], "keywords": found.get("extracted_keywords", [])},
+                    "meta": {"type": "movie_description_search", "intent": "watch_movie"},
+                }
+
+            top = matches[0]
+            desc = (top.get("description") or "").strip()
+            if len(desc) > 180:
+                desc = desc[:177].rstrip() + "..."
+
+            reply_text = (
+                f"🎬 {top['title']} (Tubi TV) — {desc}"
+                if desc
+                else f"🎬 {top['title']} (Tubi TV)"
+            )
+            voice_text = f"Based on that description on Tubi, it could be {top['title']}."
+            return {
+                "text": reply_text,
+                "voice": voice_text,
+                "data": {
+                    "title": top["title"],
+                    "platform": top.get("platform", "Tubi TV"),
+                    "url": top.get("url", ""),
+                    "score": top.get("score", 0),
+                    "top_match": top,
+                    "results": matches,
+                    "keywords": found.get("extracted_keywords", []),
+                },
+                "meta": {"type": "movie_description_search", "intent": "watch_movie"},
+            }
+        except Exception:
+            return None
 
     def route(self, text: str, intent: str = None, confidence: float = None, **kwargs) -> dict:
         if not text or not text.strip():
@@ -58,7 +148,11 @@ class Router:
                 except Exception:
                     pass
 
-        if _has_word(cleaned, MOVIE_WORDS):
+        if _is_plot_description(cleaned) or _has_word(cleaned, MOVIE_WORDS):
+            tubi_res = self._search_tubi_by_description(text)
+            if isinstance(tubi_res, dict):
+                return tubi_res
+
             if self.web_engine and hasattr(self.web_engine, "process"):
                 try:
                     movie_result = self.web_engine.process(text, intent="watch_movie")
@@ -96,7 +190,6 @@ class Router:
             except Exception:
                 pass
 
-        # Kërkim i përgjithshëm në web, vetëm nëse nuk e kemi provuar tashmë më lart
         if not tried_web:
             try:
                 if self.web_engine and hasattr(self.web_engine, "process"):
