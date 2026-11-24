@@ -19,7 +19,13 @@ STOP_WORDS = {
     "not", "only", "own", "same", "so", "than", "too", "very", "just", "don",
     "now", "movie", "film", "title", "name", "forgot", "forget", "remember",
     "looking", "find", "watch", "something", "someone", "guy", "man", "woman",
-    "person", "thing", "story", "plot", "scene", "called", "named"
+    "person", "thing", "story", "plot", "scene", "called", "named", "days",
+    "afterward", "sits", "with", "you", "your", "me", "it"
+}
+
+NOISE_TITLES = {
+    "eagles vs. cowboys",
+    "eagles vs cowboys",
 }
 
 
@@ -60,7 +66,7 @@ class _TubiMetaParser(HTMLParser):
 
 
 class TubiDescriptionFinder:
-    def __init__(self, timeout: int = 5):
+    def __init__(self, timeout: int = 4):
         self.timeout = timeout
         self.headers = {
             "User-Agent": (
@@ -72,12 +78,12 @@ class TubiDescriptionFinder:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-    def _fetch_html(self, url: str, max_bytes: int = 1_500_000) -> str:
+    def _fetch_text(self, url: str, max_bytes: int = 1_500_000) -> str:
         req = urllib.request.Request(url, headers=self.headers)
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return resp.read(max_bytes).decode("utf-8", errors="ignore")
 
-    def extract_keywords(self, description_query: str, max_terms: int = 4) -> list[str]:
+    def extract_keywords(self, description_query: str, max_terms: int = 5) -> list[str]:
         tokens = re.findall(r"\b[a-zA-Z]{3,}\b", (description_query or "").lower())
         scored = []
         seen = set()
@@ -85,7 +91,6 @@ class TubiDescriptionFinder:
             if tok in STOP_WORDS or tok in seen:
                 continue
             seen.add(tok)
-            # Fjalët më të gjata shpesh janë më specifike për komplotin
             scored.append((tok, len(tok)))
         scored.sort(key=lambda x: x[1], reverse=True)
         return [t for t, _ in scored[:max_terms]]
@@ -102,117 +107,116 @@ class TubiDescriptionFinder:
             if any(t in ("Movie", "VideoObject", "CreativeWork", "TVSeries") for t in types):
                 yield block
 
-    def _fetch_movie_page_description(self, movie_url: str) -> str:
-        try:
-            page_html = self._fetch_html(movie_url, max_bytes=800_000)
-            parser = _TubiMetaParser()
-            parser.feed(page_html)
+    def _search_tubi_candidates(self, keywords: list[str]) -> list[dict]:
+        candidates = []
+        terms_to_try = [" ".join(keywords[:2])] if len(keywords) >= 2 else keywords[:1]
+        for term in terms_to_try:
+            if not term:
+                continue
+            url = f"https://tubitv.com/search/{urllib.parse.quote(term)}"
+            try:
+                raw_html = self._fetch_text(url)
+                parser = _TubiMetaParser()
+                parser.feed(raw_html)
+                for block in parser.jsonld_blocks:
+                    for item in self._iter_media_items(block):
+                        title = html.unescape(str(item.get("name") or "")).strip()
+                        if not title or title.lower() in NOISE_TITLES:
+                            continue
+                        desc = html.unescape(str(item.get("description") or "")).strip()
+                        if not desc:
+                            continue
+                        candidates.append({
+                            "title": title,
+                            "description": desc,
+                            "url": f"https://tubitv.com/search/{urllib.parse.quote(title)}",
+                            "source": "Tubi JSON-LD",
+                        })
+            except Exception as exc:
+                logger.debug("Tubi candidate fetch skipped for '%s': %s", term, exc)
+        return candidates
 
-            for block in parser.jsonld_blocks:
-                for item in self._iter_media_items(block):
-                    desc = html.unescape(str(item.get("description") or "")).strip()
-                    if len(desc) > 20:
-                        return desc
+    def _search_open_web_movie_descriptions(self, keywords: list[str]) -> list[dict]:
+        """Kërkon dinamikisht në Wikipedia API për filma që përputhen me përshkrimin."""
+        if not keywords:
+            return []
 
-            if len(parser.meta_desc) > 20:
-                return parser.meta_desc
-        except Exception as exc:
-            logger.debug("Could not fetch movie detail page %s: %s", movie_url, exc)
-        return ""
-
-    def _search_tubi_for_term(self, term: str) -> list[dict]:
-        encoded = urllib.parse.quote(term)
-        search_url = f"https://tubitv.com/search/{encoded}"
+        search_query = " ".join(keywords[:4]) + " film"
+        api_url = (
+            "https://en.wikipedia.org/w/api.php?action=query&list=search"
+            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=6&format=json"
+        )
         candidates = []
 
         try:
-            raw_html = self._fetch_html(search_url)
-            parser = _TubiMetaParser()
-            parser.feed(raw_html)
+            raw_json = self._fetch_text(api_url, max_bytes=600_000)
+            payload = json.loads(raw_json)
+            entries = (payload.get("query") or {}).get("search") or []
 
-            for block in parser.jsonld_blocks:
-                for item in self._iter_media_items(block):
-                    title = html.unescape(str(item.get("name") or "")).strip()
-                    if not title:
-                        continue
-                    desc = html.unescape(str(item.get("description") or "")).strip()
-                    url = str(item.get("url") or search_url).strip()
-                    if url.startswith("/"):
-                        url = f"https://tubitv.com{url}"
-                    candidates.append({
-                        "title": title,
-                        "description": desc,
-                        "url": url,
-                        "matched_keyword": term,
-                    })
-
-            if not candidates:
-                pattern = r'<a[^>]+href="(/movies/\d+/[^"]+)"[^>]*>(.*?)</a>'
-                for link, raw_title in re.findall(pattern, raw_html, re.DOTALL | re.IGNORECASE):
-                    clean_title = html.unescape(re.sub(r"<.*?>", " ", raw_title))
-                    clean_title = re.sub(r"\s+", " ", clean_title).strip()
-                    slug_words = link.split("/")[-1].replace("-", " ")
-                    if len(clean_title) >= 2:
-                        candidates.append({
-                            "title": clean_title,
-                            "description": slug_words,
-                            "url": f"https://tubitv.com{link}",
-                            "matched_keyword": term,
-                        })
+            for entry in entries:
+                title = html.unescape(str(entry.get("title") or "")).strip()
+                snippet = html.unescape(re.sub(r"<.*?>", " ", str(entry.get("snippet") or ""))).strip()
+                snippet = re.sub(r"\s+", " ", snippet)
+                if not title or not snippet:
+                    continue
+                if any(bad in title.lower() for bad in ("list of ", "category:", "wikipedia:")):
+                    continue
+                clean_title = re.sub(r"\s*\([^)]*film[^)]*\)\s*$", "", title, flags=re.IGNORECASE).strip() or title
+                candidates.append({
+                    "title": clean_title,
+                    "description": snippet,
+                    "url": f"https://tubitv.com/search/{urllib.parse.quote(clean_title)}",
+                    "source": "Live Open Web / Wikipedia",
+                })
         except Exception as exc:
-            logger.warning("Tubi search failed for keyword '%s': %s", term, exc)
+            logger.warning("Open web movie search failed for '%s': %s", search_query, exc)
 
         return candidates
 
-    def _score_match(self, query: str, candidate: dict) -> tuple[float, list[str]]:
+    def _score_description_match(self, query: str, keywords: list[str], candidate: dict) -> tuple[float, list[str]]:
         q_tokens = {
             w for w in re.findall(r"\b[a-z]{3,}\b", (query or "").lower())
             if w not in STOP_WORDS
         }
-        title = (candidate.get("title") or "").lower()
         desc = (candidate.get("description") or "").lower()
+        title = (candidate.get("title") or "").lower()
         combined = f"{title} {desc}"
 
-        matched_words = sorted(w for w in q_tokens if w in combined)
-        desc_hits = sum(1 for w in matched_words if w in desc)
-        title_hits = sum(1 for w in matched_words if w in title)
+        matched = sorted(w for w in q_tokens if w in combined)
+        desc_hits = sum(1 for w in matched if w in desc)
+        kw_hits = sum(1 for kw in keywords if kw in desc)
 
-        score = (desc_hits * 2.0) + (title_hits * 1.2)
-        if len(desc) > 30 and desc_hits > 0:
-            score += 1.0
+        # Kërkojmë përputhje reale në përshkrim; nëse ka 0 përputhje, kthejmë 0.0
+        if desc_hits == 0 and kw_hits == 0:
+            return 0.0, []
 
-        return round(score, 2), matched_words
+        score = (desc_hits * 2.5) + (kw_hits * 1.5)
+        if len(desc) > 40:
+            score += 0.5
+        return round(score, 2), matched
 
     def find_by_description(self, description_query: str, top_k: int = 3) -> dict:
-        keywords = self.extract_keywords(description_query, max_terms=3)
-        search_terms = keywords if keywords else [description_query.strip()]
+        keywords = self.extract_keywords(description_query, max_terms=5)
+        candidates = self._search_tubi_candidates(keywords)
+        candidates.extend(self._search_open_web_movie_descriptions(keywords))
 
-        collected = []
-        seen_urls = set()
-
-        for term in search_terms:
-            for item in self._search_tubi_for_term(term):
-                if item["url"] not in seen_urls:
-                    seen_urls.add(item["url"])
-                    collected.append(item)
-            if len(collected) >= 12:
-                break
-
-        # Plotëso përshkrimin për disa kandidatë kryesorë nëse mungon në listën e kërkimit
-        for item in collected[:4]:
-            if len(item.get("description") or "") < 25 and "/movies/" in item.get("url", ""):
-                full_desc = self._fetch_movie_page_description(item["url"])
-                if full_desc:
-                    item["description"] = full_desc
-
+        seen_titles = set()
         scored = []
-        for item in collected:
-            score, matched_words = self._score_match(description_query, item)
+
+        for cand in candidates:
+            norm_title = cand["title"].lower()
+            if norm_title in seen_titles:
+                continue
+            score, matched_words = self._score_description_match(description_query, keywords, cand)
+            if score <= 0:
+                continue
+            seen_titles.add(norm_title)
             scored.append({
-                "title": item["title"],
+                "title": cand["title"],
                 "platform": "Tubi TV",
-                "url": item["url"],
-                "description": item.get("description", ""),
+                "url": cand["url"],
+                "description": cand["description"],
+                "source": cand.get("source", "Live Search"),
                 "matched_keywords": matched_words,
                 "score": score,
             })
