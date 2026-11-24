@@ -24,6 +24,11 @@ from engines.background_engine import BackgroundEngine
 from engines.watch_companion_engine import WatchCompanionEngine
 
 try:
+    from engines.tubi_description_finder import TubiDescriptionFinder
+except ImportError:
+    TubiDescriptionFinder = None
+
+try:
     from core.channel_player import ChannelPlayer
 except ImportError:
     ChannelPlayer = None
@@ -33,9 +38,11 @@ try:
 except ImportError:
     ChannelAI = None
 
+
 def client_ip():
     fwd = request.headers.get("X-Forwarded-For", "")
     return fwd.split(",")[0].strip() if fwd else request.remote_addr
+
 
 logger = setup_logger("FalconAI.Main")
 
@@ -51,6 +58,7 @@ sports_engine = None
 conversation_engine = None
 background_engine = None
 watch_companion = None
+tubi_description_finder = None
 router = None
 brain = None
 agent = None
@@ -63,6 +71,9 @@ try:
     sports_engine = SportsEngine()
     conversation_engine = ConversationEngine()
     background_engine = BackgroundEngine()
+
+    if TubiDescriptionFinder is not None:
+        tubi_description_finder = TubiDescriptionFinder(timeout=4)
 
     router = Router(
         conversation_engine=conversation_engine,
@@ -123,6 +134,92 @@ NEWS_INTENTS = [
     "watch_news", "watch_war", "watch_balkan_news", "tech_news",
     "sports_news", "business_news", "general_search"
 ]
+
+PLOT_DESCRIPTION_MARKERS = [
+    "a movie where",
+    "a film where",
+    "movie about",
+    "film about",
+    "don't remember the name",
+    "dont remember the name",
+    "forgot the title",
+    "forget the title",
+    "what movie is",
+    "what film is",
+    "looking for a movie",
+    "looking for a film",
+    "sits with you",
+    "days afterward",
+]
+
+
+def is_plot_description_query(clean_text: str) -> bool:
+    if any(marker in clean_text for marker in PLOT_DESCRIPTION_MARKERS):
+        return True
+    has_media_word = bool(re.search(r"\b(?:movie|film|cinema)\b", clean_text))
+    has_clue_phrase = bool(
+        re.search(
+            r"\b(?:where|about|plot|scene|forgot|remember|blind|detective|island|amnesia|tragedy|internal)\b",
+            clean_text,
+        )
+    )
+    return has_media_word and has_clue_phrase
+
+
+def handle_tubi_description_search(user_text: str) -> dict:
+    if tubi_description_finder is None:
+        return {
+            "status": "success",
+            "type": "movie_description_search",
+            "data": {"results": []},
+            "text": "Moduli i kërkimit të filmave në Tubi nuk është aktiv.",
+            "voice_text": "Tubi description search is not available right now.",
+        }
+
+    found = tubi_description_finder.find_by_description(user_text, top_k=3)
+    matches = found.get("results") or []
+
+    if not matches:
+        msg = "Nuk gjeta një film në Tubi nga ky përshkrim. Provo të japësh më shumë detaje nga komploti ose personazhet."
+        voice_msg = "I couldn't find a matching movie on Tubi from that description. Try sharing a few more plot details."
+        return {
+            "status": "success",
+            "type": "movie_description_search",
+            "data": {
+                "results": [],
+                "keywords": found.get("extracted_keywords", []),
+            },
+            "text": msg,
+            "voice_text": voice_msg,
+        }
+
+    top = matches[0]
+    desc_preview = (top.get("description") or "").strip()
+    if len(desc_preview) > 180:
+        desc_preview = desc_preview[:177].rstrip() + "..."
+
+    display_text = (
+        f"🎬 {top['title']} (Tubi TV) — {desc_preview}"
+        if desc_preview
+        else f"🎬 {top['title']} (Tubi TV)"
+    )
+    spoken_text = f"Based on that description on Tubi, it could be {top['title']}."
+
+    return {
+        "status": "success",
+        "type": "movie_description_search",
+        "data": {
+            "title": top["title"],
+            "platform": top.get("platform", "Tubi TV"),
+            "url": top.get("url", ""),
+            "score": top.get("score", 0),
+            "top_match": top,
+            "results": matches,
+            "keywords": found.get("extracted_keywords", []),
+        },
+        "text": display_text,
+        "voice_text": spoken_text,
+    }
 
 
 @app.route('/')
@@ -341,8 +438,6 @@ def process_request():
         # 2. Moti (para muzikës dhe lajmeve, që "weather in Warsaw" mos shkojë te lajmet)
         if WEATHER_PATTERN.search(clean_input) and weather_engine:
             try:
-                # Teksti i plotë: motori nxjerr vetë qytetin; nëse nuk ka qytet,
-                # përdor lat/lon (GPS) ose IP-në e përdoruesit.
                 weather_res = weather_engine.get_weather(
                     user_text,
                     ip=client_ip(),
@@ -353,7 +448,15 @@ def process_request():
             except Exception as w_err:
                 logger.error(f"[Weather Error]: {w_err}")
 
-        # 3. Muzikë
+        # 3. Kërkim filmi sipas përshkrimit në Tubi (përpara search-it të përgjithshëm / agjentit)
+        if tubi_description_finder is not None and is_plot_description_query(clean_input):
+            try:
+                desc_res = handle_tubi_description_search(user_text)
+                return jsonify(desc_res), 200
+            except Exception as desc_err:
+                logger.error(f"[Tubi Description Search Error]: {desc_err}")
+
+        # 4. Muzikë
         is_music_request = bool(MUSIC_PATTERN.search(clean_input)) or data.get("intent") == "play_music"
 
         if is_music_request and music_engine is not None:
@@ -366,7 +469,7 @@ def process_request():
             except Exception as m_err:
                 logger.error(f"[Music Engine Direct Error]: {m_err}")
 
-        # 4. Lajme / web
+        # 5. Lajme / web
         is_news_or_web = bool(NEWS_PATTERN.search(clean_input)) or data.get("intent") in NEWS_INTENTS
 
         if is_news_or_web and web_engine is not None:
@@ -379,7 +482,7 @@ def process_request():
             except Exception as web_err:
                 logger.error(f"[Web Engine Direct Error]: {web_err}")
 
-        # 5. Background
+        # 6. Background
         if background_engine and any(trig in clean_input for trig in BACKGROUND_TRIGGERS):
             try:
                 bg_result = background_engine.search(user_text)
@@ -410,7 +513,7 @@ def process_request():
             except Exception as bg_err:
                 logger.error(f"[Background Error]: {bg_err}")
 
-        # 6. Agjenti (kanale, librari, brain/router)
+        # 7. Agjenti (kanale, librari, brain/router)
         response_data = agent.handle_request(user_text, user_id)
         route_name = response_data.get("type", "unknown")
 
@@ -467,6 +570,11 @@ def run_cli():
                 if chat_result is not None:
                     print(f"[FalconAI]: {chat_result.get('text')}\n")
                     continue
+
+            if tubi_description_finder and is_plot_description_query(clean_input):
+                desc_res = handle_tubi_description_search(user_input)
+                print(f"[Tubi Description]: {desc_res.get('text')}\n")
+                continue
 
             if background_engine and any(trig in clean_input for trig in BACKGROUND_TRIGGERS):
                 bg_result = background_engine.search(user_input)
