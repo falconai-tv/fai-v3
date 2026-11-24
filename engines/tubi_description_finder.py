@@ -25,6 +25,11 @@ STOP_WORDS = {
     "trying", "get", "back"
 }
 
+BROAD_CONTEXT_WORDS = {
+    "market", "company", "building", "house", "young", "working", "moving",
+    "internal", "physical", "tragedy", "couple", "people"
+}
+
 CONCEPT_EXPANSIONS = {
     "internal": ["grief", "emotional", "guilt", "drama", "psychological"],
     "tragedy": ["grief", "loss", "mourning", "drama"],
@@ -34,6 +39,8 @@ CONCEPT_EXPANSIONS = {
     "haunting": ["psychological", "mystery", "thriller", "drama"],
     "mind": ["psychological", "memory", "mystery"],
     "future": ["sci-fi", "science", "technology", "space"],
+    "crash": ["recession", "wall", "finance", "crisis", "bank"],
+    "stock": ["wall", "finance", "trader", "trading", "shares"],
 }
 
 MEDIA_POSITIVE_TERMS = {
@@ -44,7 +51,8 @@ MEDIA_POSITIVE_TERMS = {
 
 COMPANY_PENALTY_TERMS = {
     "company", "headquartered", "founded", "startup", "software",
-    "platform", "website", "app", "valuation", "venture", "ceo", "shareholders"
+    "platform", "website", "app", "valuation", "venture", "ceo", "shareholders",
+    "investors", "accelerator", "co-founders"
 }
 
 GENERIC_CONCEPT_TITLES = {
@@ -56,6 +64,7 @@ GENERIC_CONCEPT_TITLES = {
     "financial market",
     "market trader",
     "insider trading",
+    "entrepreneurs first",
 }
 
 NOISE_TITLES = {
@@ -126,7 +135,9 @@ class TubiDescriptionFinder:
             if tok in STOP_WORDS or tok in seen:
                 continue
             seen.add(tok)
-            scored.append((tok, len(tok)))
+            # Fjalët specifike (jo të përgjithshme si "market" ose "building") marrin prioritet më të lartë
+            rank = len(tok) + (4.0 if tok not in BROAD_CONTEXT_WORDS else 0.0)
+            scored.append((tok, rank))
         scored.sort(key=lambda x: x[1], reverse=True)
         return [t for t, _ in scored[:max_terms]]
 
@@ -260,23 +271,23 @@ class TubiDescriptionFinder:
         if desc_hits == 0 and expanded_hits == 0:
             return 0.0, []
 
-        # Nëse pyetja ka fjalë specifike (psh. stock, crash, startup, silicon) dhe asnjëra nuk del në përshkrim,
-        # ul pikët që përputhje periferike (si "market trader" te një film tjetër) të mos fitojnë.
-        specific_tokens = {w for w in q_tokens if len(w) >= 5}
-        if specific_tokens and not (specific_tokens & combined_words):
+        high_signal_tokens = {w for w in q_tokens if len(w) >= 5 and w not in BROAD_CONTEXT_WORDS}
+        if high_signal_tokens and not (high_signal_tokens & combined_words):
             return 0.0, []
 
         media_hits = len(combined_words & MEDIA_POSITIVE_TERMS)
         company_hits = len(combined_words & COMPANY_PENALTY_TERMS)
+        broad_only_hits = sum(1 for w in matched if w in BROAD_CONTEXT_WORDS)
 
         multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
-        specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched)
+        specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched if w not in BROAD_CONTEXT_WORDS)
         media_bonus = (3.5 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
         company_penalty = (
-            company_hits * 2.5
+            company_hits * 3.0
             if media_hits == 0 and not candidate.get("is_explicit_media_page")
-            else company_hits * 0.8
+            else company_hits * 1.0
         )
+        broad_penalty = broad_only_hits * 1.0
 
         score = (
             (desc_hits * 2.5)
@@ -285,6 +296,7 @@ class TubiDescriptionFinder:
             + specificity_bonus
             + media_bonus
             - company_penalty
+            - broad_penalty
         )
 
         if score <= 0:
