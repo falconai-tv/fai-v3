@@ -20,7 +20,8 @@ STOP_WORDS = {
     "now", "movie", "film", "title", "name", "forgot", "forget", "remember",
     "looking", "find", "watch", "something", "someone", "guy", "man", "woman",
     "person", "thing", "story", "plot", "scene", "called", "named", "days",
-    "afterward", "sits", "with", "you", "your", "me", "it"
+    "afterward", "sits", "with", "you", "your", "me", "it", "trying", "get",
+    "back"
 }
 
 NOISE_TITLES = {
@@ -144,7 +145,7 @@ class TubiDescriptionFinder:
         search_query = " ".join(keywords[:4]) + " film"
         api_url = (
             "https://en.wikipedia.org/w/api.php?action=query&list=search"
-            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=6&format=json"
+            f"&srsearch={urllib.parse.quote(search_query)}&srlimit=8&format=json"
         )
         candidates = []
 
@@ -173,7 +174,9 @@ class TubiDescriptionFinder:
 
         return candidates
 
-    def _score_description_match(self, query: str, keywords: list[str], candidate: dict) -> tuple[float, list[str]]:
+    def _score_description_match(
+        self, query: str, keywords: list[str], candidate: dict
+    ) -> tuple[float, list[str]]:
         q_tokens = {
             w for w in re.findall(r"\b[a-z]{3,}\b", (query or "").lower())
             if w not in STOP_WORDS
@@ -186,13 +189,18 @@ class TubiDescriptionFinder:
         desc_hits = sum(1 for w in matched if w in desc)
         kw_hits = sum(1 for kw in keywords if kw in desc)
 
-        # Kërkojmë përputhje reale në përshkrim; nëse ka 0 përputhje, kthejmë 0.0
         if desc_hits == 0 and kw_hits == 0:
             return 0.0, []
 
-        score = (desc_hits * 2.5) + (kw_hits * 1.5)
-        if len(desc) > 40:
-            score += 0.5
+        # Nëse pyetja ka 4+ fjalë kyçe dhe përputhet vetëm 1 fjalë e vetme, zbrit pikët
+        # që të mos fitojnë përputhje të dobëta të rastësishme.
+        multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
+        specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched)
+        score = (desc_hits * 2.5) + (kw_hits * 1.5) + multi_match_bonus + specificity_bonus
+
+        if score <= 0:
+            return 0.0, []
+
         return round(score, 2), matched
 
     def find_by_description(self, description_query: str, top_k: int = 3) -> dict:
