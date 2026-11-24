@@ -18,10 +18,11 @@ STOP_WORDS = {
     "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor",
     "not", "only", "own", "same", "so", "than", "too", "very", "just", "don",
     "now", "movie", "film", "title", "name", "forgot", "forget", "remember",
-    "looking", "find", "watch", "something", "someone", "guy", "man", "woman",
-    "person", "thing", "story", "plot", "scene", "called", "named", "days",
-    "afterward", "sits", "with", "you", "your", "me", "it", "trying", "get",
-    "back"
+    "looking", "find", "watch", "something", "someone", "anyone", "everyone",
+    "everything", "guy", "man", "woman", "person", "thing", "story", "plot",
+    "scene", "called", "named", "days", "afterward", "sits", "with", "you",
+    "your", "me", "it", "that", "this", "which", "who", "whom", "whose",
+    "trying", "get", "back"
 }
 
 NOISE_TITLES = {
@@ -192,8 +193,6 @@ class TubiDescriptionFinder:
         if desc_hits == 0 and kw_hits == 0:
             return 0.0, []
 
-        # Nëse pyetja ka 4+ fjalë kyçe dhe përputhet vetëm 1 fjalë e vetme, zbrit pikët
-        # që të mos fitojnë përputhje të dobëta të rastësishme.
         multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
         specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched)
         score = (desc_hits * 2.5) + (kw_hits * 1.5) + multi_match_bonus + specificity_bonus
