@@ -26,11 +26,42 @@ try:
 
     conversation_engine = ConversationEngine()
     watch_engine = WatchCompanionEngine(conversation_engine)
-    logger.info("Engines u ngarkuan me sukses.")
+    logger.info("Engines kryesore u ngarkuan me sukses.")
 except Exception as e:
-    logger.error(f"Gabim gjatë ngarkimit të engines: {e}")
+    logger.error(f"Gabim gjatë ngarkimit të engines kryesore: {e}")
     conversation_engine = None
     watch_engine = None
+
+try:
+    from engines.background_engine import BackgroundEngine
+    background_engine = BackgroundEngine()
+    logger.info("BackgroundEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të BackgroundEngine: {e}")
+    background_engine = None
+
+try:
+    from engines.weather_engine import WeatherEngine
+    weather_engine = WeatherEngine()
+    logger.info("WeatherEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të WeatherEngine: {e}")
+    weather_engine = None
+
+try:
+    from engines.web_engine import WebEngine
+    web_engine = WebEngine()
+    logger.info("WebEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të WebEngine: {e}")
+    web_engine = None
+
+
+def _get_client_ip() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return (request.remote_addr or "").strip()
 
 
 @app.route('/', methods=['GET'])
@@ -39,7 +70,10 @@ def index():
         "status": "online",
         "service": "FalconAI Engine v3 API",
         "companion": "active" if watch_engine else "inactive",
-        "channel_finder": "active" if smart_channel_finder else "inactive"
+        "channel_finder": "active" if smart_channel_finder else "inactive",
+        "background_engine": "active" if background_engine else "inactive",
+        "weather_engine": "active" if weather_engine else "inactive",
+        "web_engine": "active" if web_engine else "inactive"
     }), 200
 
 
@@ -60,6 +94,59 @@ def handle_channel_find():
 
     res = smart_channel_finder.find(query)
     return jsonify(res), 200
+
+
+@app.route('/background/search', methods=['POST'])
+def handle_background_search():
+    if not background_engine:
+        return jsonify({"status": "error", "message": "Background engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    query = (data.get('query') or data.get('text') or data.get('message') or '').strip()
+    if not query:
+        return jsonify({"status": "error", "message": "Missing 'query'"}), 400
+
+    top_k = data.get('top_k', 1)
+    res = background_engine.search(query, top_k=top_k)
+    return jsonify(res), 200
+
+
+@app.route('/weather', methods=['POST'])
+def handle_weather():
+    if not weather_engine:
+        return jsonify({"status": "error", "message": "Weather engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    query = (
+        data.get('query')
+        or data.get('text')
+        or data.get('message')
+        or data.get('city')
+        or ''
+    ).strip()
+    lat = data.get('lat')
+    lon = data.get('lon')
+    client_ip = _get_client_ip()
+
+    res = weather_engine.process(query=query, ip=client_ip, lat=lat, lon=lon)
+    return jsonify(res), 200
+
+
+@app.route('/news', methods=['POST'])
+def handle_news():
+    if not web_engine:
+        return jsonify({"status": "error", "message": "Web engine unavailable"}), 500
+
+    data = request.get_json(silent=True) or {}
+    query = (data.get('query') or data.get('text') or data.get('message') or '').strip()
+    if not query:
+        return jsonify({"status": "error", "message": "Missing 'query'"}), 400
+
+    category = data.get('category')
+    intent = data.get('intent')
+    res = web_engine.run_news_engine(query=query, intent=intent, category=category)
+    return jsonify(res), 200
+
 
 @app.route('/chat', methods=['POST'])
 def handle_chat():
