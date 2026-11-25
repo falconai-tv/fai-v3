@@ -23,7 +23,7 @@ GROQ_MODEL_PRIORITY = [
 ]
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", GROQ_MODEL_PRIORITY[0])
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_TIMEOUT = 15
 
 SYSTEM_PROMPT = (
@@ -69,10 +69,67 @@ def extract_chat_text(raw_text: str):
     return text
 
 
+def detect_chat_action(user_text: str, channel_finder=None):
+    q = (user_text or "").lower().strip()
+    if not q:
+        return None
+
+    # 1. Muzikë -> kalon te faqja/player-i i muzikës
+    if re.search(r"\b(music|muzike|muzikë|kenga|kënga|song|play some music|lësho muzikë|lesho muzike)\b", q):
+        reply = "Opening music for you."
+        return {
+            "text": reply,
+            "voice": reply,
+            "action": {
+                "type": "open_music",
+                "route": "/music",
+                "query": user_text,
+            },
+            "meta": {"type": "chat_action", "intent": "open_music"},
+        }
+
+    # 2. Film / rekomandim filmi -> hap pamjen e filmit (p.sh. Tubi / movies)
+    if re.search(r"\b(film|filma|movie|movies|propozo|recommend|tubi|watch a movie|ndonje film|ndonjë film)\b", q):
+        reply = "Opening movie picks for you."
+        return {
+            "text": reply,
+            "voice": reply,
+            "action": {
+                "type": "open_movie",
+                "route": "/movies",
+                "provider": "tubi",
+                "query": user_text,
+            },
+            "meta": {"type": "chat_action", "intent": "open_movie"},
+        }
+
+    # 3. Kanal live / TV -> gjen kanalin përmes SmartChannelFinder nëse ekziston
+    if re.search(r"\b(channel|kanal|kanalin|live|news|lajme|sport|sports|futbol|cartoons|vizatimor)\b", q):
+        if channel_finder:
+            found = channel_finder.find(user_text)
+            if found and found.get("data"):
+                ch = found["data"]
+                msg = ch.get("text") or f"Opening {ch.get('name', 'channel')}..."
+                return {
+                    "type": "video_stream",
+                    "text": msg,
+                    "voice": ch.get("voice") or msg,
+                    "data": ch,
+                    "action": {
+                        "type": "play_channel",
+                        "channel": ch,
+                    },
+                    "meta": {"type": "chat_action", "intent": "play_channel"},
+                }
+
+    return None
+
+
 class ConversationEngine:
-    def __init__(self, model: str = GROQ_MODEL):
+    def __init__(self, model: str = GROQ_MODEL, channel_finder=None):
         self.model = model
         self._working_model = None
+        self.channel_finder = channel_finder
 
         if not GROQ_API_KEY:
             logger.warning("[CONVERSATION] GROQ_API_KEY is not set.")
@@ -136,7 +193,8 @@ class ConversationEngine:
                 .strip()
             )
 
-            reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+            reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL)
+            reply = re.sub(r"\s+", " ", reply).strip()
             return reply or "Sorry, I'm not sure how to respond to that."
 
     def chat(self, user_id: str, user_text: str) -> dict:
@@ -146,6 +204,10 @@ class ConversationEngine:
                 "voice": "I didn't catch that. Could you say it again?",
                 "meta": {"type": "chat", "intent": "conversation"},
             }
+
+        action_payload = detect_chat_action(user_text, channel_finder=self.channel_finder)
+        if action_payload:
+            return action_payload
 
         if not GROQ_API_KEY:
             return {
