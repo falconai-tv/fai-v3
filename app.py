@@ -61,6 +61,37 @@ def handle_channel_find():
     res = smart_channel_finder.find(query)
     return jsonify(res), 200
 
+@app.route('/chat', methods=['POST'])
+def handle_chat():
+    if not conversation_engine:
+        return jsonify({
+            "status": "error",
+            "text": "Conversation engine unavailable",
+            "voice": "Conversation engine unavailable",
+            "meta": {"type": "chat", "error": "engine_unavailable"}
+        }), 500
+
+    data = request.get_json(silent=True) or {}
+    user_text = (data.get('message') or data.get('text') or data.get('query') or '').strip()
+    if not user_text:
+        return jsonify({
+            "status": "error",
+            "text": "Missing 'message' field",
+            "voice": "Please say or type a message.",
+            "meta": {"type": "chat", "error": "missing_message"}
+        }), 400
+
+    user_id = (data.get('user_id') or data.get('session_id') or 'tv_user').strip()
+    context = data.get('context') or {}
+    current_channel = context.get('current_channel') or data.get('current_channel')
+
+    enriched_text = user_text
+    if current_channel and any(k in user_text.lower() for k in ("watching", "channel", "news", "happening", "program", "show", "shiko", "kanal")):
+        enriched_text = f"[Currently watching: {current_channel}] {user_text}"
+
+    result = conversation_engine.chat(user_id=user_id, user_text=enriched_text)
+    return jsonify(result), 200
+
 
 @app.route('/watch/start', methods=['POST'])
 def handle_watch_start():
