@@ -188,29 +188,29 @@ class WebEngine:
                 category = self.intent_category[intent]
             else:
                 q_lower = query.lower()
-                if any(w in q_lower for w in ["war", "conflict", "middle east", "gaza", "ukraine", "israel", "fight"]):
+                if any(w in q_lower for w in ["war", "conflict", "middle east", "gaza", "ukraine", "israel", "fight", "lufte", "luftë"]):
                     category = "war"
-                elif any(w in q_lower for w in ["europe", "germany", "france", "uk", "italy", "spain", "eu"]):
+                elif any(w in q_lower for w in ["europe", "germany", "france", "uk", "italy", "spain", "eu", "evrope", "evropë"]):
                     category = "europe"
-                elif any(w in q_lower for w in ["asia", "china", "japan", "india", "korea", "singapore"]):
+                elif any(w in q_lower for w in ["asia", "china", "japan", "india", "korea", "singapore", "azi"]):
                     category = "asia"
-                elif any(w in q_lower for w in ["usa", "united states", "america", "american"]):
+                elif any(w in q_lower for w in ["usa", "united states", "america", "american", "shba"]):
                     category = "usa"
                 elif any(w in q_lower for w in ["canada", "brazil", "mexico", "argentina"]):
                     category = "americas"
-                elif any(w in q_lower for w in ["africa", "kenya", "south africa"]):
+                elif any(w in q_lower for w in ["africa", "kenya", "south africa", "afrike", "afrikë"]):
                     category = "africa"
                 elif any(w in q_lower for w in ["australia", "zealand", "oceania"]):
                     category = "oceania"
-                elif any(w in q_lower for w in ["balkan", "kosova", "albania", "prishtine", "tirane", "serbia"]):
+                elif any(w in q_lower for w in ["balkan", "kosova", "kosovë", "kosovo", "albania", "shqiperi", "shqipëri", "prishtine", "prishtinë", "tirane", "tiranë", "serbia"]):
                     category = "balkan"
-                elif any(w in q_lower for w in ["tech", "ai", "software", "apple", "google", "phone", "code"]):
+                elif any(w in q_lower for w in ["tech", "ai", "software", "apple", "google", "phone", "code", "teknologji"]):
                     category = "technology"
-                elif any(w in q_lower for w in ["sport", "football", "match", "cup", "score", "game"]):
+                elif any(w in q_lower for w in ["sport", "football", "match", "cup", "score", "game", "futbol"]):
                     category = "sports"
-                elif any(w in q_lower for w in ["business", "stock", "market", "economy", "money", "crypto"]):
+                elif any(w in q_lower for w in ["business", "stock", "market", "economy", "money", "crypto", "biznes", "ekonomi"]):
                     category = "business"
-                elif any(w in q_lower for w in ["politics", "government", "election", "president", "parliament"]):
+                elif any(w in q_lower for w in ["politics", "government", "election", "president", "parliament", "politike", "politikë"]):
                     category = "politics"
                 else:
                     category = "world"
@@ -247,7 +247,7 @@ class WebEngine:
 
         for url in feeds:
             try:
-                response = requests.get(url, timeout=7, headers=headers)
+                response = requests.get(url, timeout=self.timeout, headers=headers)
                 if response.status_code != 200:
                     logger.warning(f"[RSS HTTP {response.status_code}] {url}")
                     continue
@@ -288,7 +288,7 @@ class WebEngine:
 
     def fetch_full_article(self, url):
         try:
-            response = requests.get(url, timeout=8, headers={
+            response = requests.get(url, timeout=4, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
             })
 
@@ -330,7 +330,8 @@ class WebEngine:
             "what", "happened", "in", "the", "is", "right", "now",
             "tell", "me", "about", "latest", "news", "from", "can",
             "you", "show", "give", "get", "find", "please", "today",
-            "happening", "going", "on", "any", "update", "updates"
+            "happening", "going", "on", "any", "update", "updates",
+            "lajme", "lajmet", "per", "për", "ne", "në", "nga", "sot", "tani", "me", "më"
         }
         return [w for w in text.lower().split() if w not in stopwords and len(w) > 2]
 
@@ -338,14 +339,19 @@ class WebEngine:
         if not keywords:
             return articles[:3]
 
-        scored = []
+        expanded = set(keywords)
+        if any(k in expanded for k in ("kosove", "kosovë", "kosovo", "prishtine", "prishtinë", "prishtina", "albania", "shqiperi", "shqipëri", "tirane", "tiranë", "balkan")):
+            expanded.update(["kosovo", "kosova", "prishtina", "balkan", "albania", "tirana"])
+
+        matched = []
         for article in articles:
             text = (article["title"] + " " + article.get("description", "")).lower()
-            score = sum(1 for kw in keywords if kw in text)
-            scored.append((score, article))
+            score = sum(1 for kw in expanded if kw in text)
+            if score > 0:
+                matched.append((score, article))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [a[1] for a in scored]
+        matched.sort(key=lambda x: x[0], reverse=True)
+        return [a[1] for a in matched] if matched else []
 
     def clean_description(self, desc):
         if not desc:
