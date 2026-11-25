@@ -102,11 +102,11 @@ CHANNELS = [
     Channel("ABC News Live", "https://content.uplynk.com/channel/3324f2467c414329b3b0cc5cd987b6be.m3u8",
             "news", "en", "usa", ["news", "usa", "abc", "breaking news", "american", "live"]),
     Channel("Bloomberg TV US", "https://bloomberg.com/media-manifest/streams/us.m3u8",
-            "news", "en", "usa", ["news", "finance", "business", "economy", "bloomberg", "usa", "live"]),
+            "news", "en", "usa", ["news", "finance", "business", "economy", "stocks", "markets", "financial", "bursa", "bloomberg", "usa", "live"]),
     Channel("CBS Sports Golazo", "https://dai.google.com/linear/hls/event/GxrCGmwST0ixsrc_QgB6qw/master.m3u8",
             "sports", "en", "usa", ["sports", "soccer", "football", "cbs", "live"]),
     Channel("Cheddar News", "https://cheddar-us.samsung.wurl.tv/playlist.m3u8",
-            "news", "en", "usa", ["news", "business", "technology", "usa", "live"]),
+            "news", "en", "usa", ["news", "business", "technology", "finance", "markets", "usa", "live"]),
     Channel("Court TV", "https://content.uplynk.com/channel/6c0bd0f94b1d4526a98676e9699a10ef.m3u8",
             "news", "en", "usa", ["news", "legal", "crime", "trials", "usa", "live"]),
     Channel("Fox Weather", "https://247wlive.foxweather.com/stream/index.m3u8",
@@ -178,7 +178,7 @@ CHANNELS = [
     Channel("Entertainment Tonight", "https://cbsta49f-cbsta49f-ms.global.ssl.fastly.net/amagi7b98-AmagiMixible/master/amagi7b98-AmagiMixible.m3u8",
             "entertainment", "en", "usa", ["celebrity", "hollywood", "pop culture", "entertainment", "live"]),
     Channel("Yahoo! Finance", "https://d1ewctnvcwvvvu.cloudfront.net/playlist.m3u8",
-            "news", "en", "usa", ["finance", "business", "stocks", "economy", "yahoo", "live"]),
+            "news", "en", "usa", ["finance", "business", "stocks", "economy", "financial", "markets", "bursa", "yahoo", "live"]),
     Channel("World Channel PBS", "https://world.lls.pbs.org/index.m3u8",
             "education", "en", "usa", ["documentary", "pbs", "culture", "history", "science", "live"]),
     Channel("FNX First Nations", "https://fnx.lls.pbs.org/index.m3u8",
@@ -337,7 +337,7 @@ CHANNELS = [
     # ── RELIGIOUS ──────────────────────────────────────────────────────────────
     Channel("TBN", "https://d7ge95bb03xsu.cloudfront.net/out/v1/0c95a89614194912834019fc37d741ef/tbn-freecast.m3u8",
             "religious", "en", "usa", ["christian", "faith", "gospel", "sermons", "religious", "live"]),
-    Channel("CBN", "https://fastly.live.brightcove.com/6380396819112/us-east-1/734546207001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoiczFpM3ZpLmVncmVzcy50N2M3emwiLCJhY2NvdW50X2lkIjoiNzM0NTQ2MjA3MDAxIiwiZWhuIjoiZmFzdGx5LmxpdmUuYnJpZ2h0Y292ZS5jb20iLCJpc3MiOiJibGl2ZS1wbGF5YmFjay1zb3VyY2UtYXBpIiwic3ViIjoicGF0aG1hcHRva2VuIiwiYXVkIjpbIjczNDU0NjIwNzAwMSJdLCJqdGkiOiI2MzgwMzk2ODE5MTEyIn0.GDYp4IWtzwPkupEWeeOavnioVknO-Ev3UGlHvM1rE6I/playlist-hls.m3u8",
+    Channel("CBN", "https://fastly.live.brightcove.com/6380396819112/us-east-1/734546207001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoiczFpM3ZpLmVncmVzcy50N2M3emwiLCJhY2NvdW50X2lkIjoiNzM0NTQ2MjA3MDAxIiwiZWhuIjoiZmFzdGx5LmxpdmUuYnJpZ2h0Y292ZS5jb20iLCJpc3OiOiJibGl2ZS1wbGF5YmFjay1zb3VyY2UtYXBpIiwic3ViIjoicGF0aG1hcHRva2VuIiwiYXVkIjpbIjczNDU0NjIwNzAwMSJdLCJqdGkiOiI2MzgwMzk2ODE5MTEyIn0.GDYp4IWtzwPkupEWeeOavnioVknO-Ev3UGlHvM1rE6I/playlist-hls.m3u8",
             "religious", "en", "usa", ["christian", "faith", "gospel", "news", "religious", "live"]),
     Channel("Catholic TV", "https://catholictvhd-lh.akamaized.net/hls/live/2043390/CTVLiveHD/master.m3u8",
             "religious", "en", "usa", ["catholic", "christian", "faith", "mass", "religious", "live"]),
@@ -370,6 +370,20 @@ CHANNELS = [
 ]
 
 
+# ── Stopwords & High-Priority Domain Keywords ────────────────────────────────
+
+STOP_WORDS = {
+    "a", "an", "the", "and", "or", "with", "for", "to", "of", "in", "on", "at",
+    "i", "want", "watch", "open", "play", "show", "find", "channel",
+    "dua", "hap", "shiko", "kanal", "nje", "një", "me", "dhe", "ose", "per", "për"
+}
+
+FINANCE_KEYWORDS = {
+    "finance", "financial", "markets", "market", "stocks", "stock", "economy",
+    "business", "bursa", "financa", "tregjet", "tregu"
+}
+
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def get_channel(name: str):
@@ -382,28 +396,33 @@ def get_channel(name: str):
 
 def find_best_channel(query: str):
     query_lower = query.lower().strip()
+    words = [w for w in query_lower.split() if len(w) >= 2 and w not in STOP_WORDS]
     best, best_score = None, 0
 
     for ch in CHANNELS:
         score = 0
         name_lower = ch.name.lower()
+        tags = [t.lower() for t in (ch.tags or [])]
+        category_lower = (ch.category or "").lower()
 
+        # 1. Përputhje e plotë ose me nënvarg te emri i kanalit
         if query_lower == name_lower:
-            score += 10
+            score += 20
         elif query_lower in name_lower:
-            score += 6
-        elif any(word in name_lower for word in query_lower.split()):
-            score += 3
+            score += 10
+        elif any(len(w) >= 3 and w in name_lower for w in words):
+            score += 4
 
-        if ch.category and ch.category in query_lower:
-            score += 2
+        # 2. Përputhje te kategoria
+        if category_lower and category_lower in words:
+            score += 4
 
-        if ch.tags:
-            for tag in ch.tags:
-                if tag in query_lower:
-                    score += 3
-                elif any(word in tag for word in query_lower.split()):
-                    score += 1
+        # 3. Përputhje e fjalëve te etiketat (tags)
+        for w in words:
+            if w in tags:
+                score += 8 if w in FINANCE_KEYWORDS else 4
+            elif len(w) >= 4 and any(w in t for t in tags):
+                score += 2
 
         if score > best_score:
             best_score = score
