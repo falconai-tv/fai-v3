@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
+import re
 
 
 @dataclass
@@ -337,7 +338,7 @@ CHANNELS = [
     # ── RELIGIOUS ──────────────────────────────────────────────────────────────
     Channel("TBN", "https://d7ge95bb03xsu.cloudfront.net/out/v1/0c95a89614194912834019fc37d741ef/tbn-freecast.m3u8",
             "religious", "en", "usa", ["christian", "faith", "gospel", "sermons", "religious", "live"]),
-    Channel("CBN", "https://fastly.live.brightcove.com/6380396819112/us-east-1/734546207001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoiczFpM3ZpLmVncmVzcy50N2M3emwiLCJhY2NvdW50X2lkIjoiNzM0NTQ2MjA3MDAxIiwiZWhuIjoiZmFzdGx5LmxpdmUuYnJpZ2h0Y292ZS5jb20iLCJpc3OiOiJibGl2ZS1wbGF5YmFjay1zb3VyY2UtYXBpIiwic3ViIjoicGF0aG1hcHRva2VuIiwiYXVkIjpbIjczNDU0NjIwNzAwMSJdLCJqdGkiOiI2MzgwMzk2ODE5MTEyIn0.GDYp4IWtzwPkupEWeeOavnioVknO-Ev3UGlHvM1rE6I/playlist-hls.m3u8",
+    Channel("CBN", "https://fastly.live.brightcove.com/6380396819112/us-east-1/734546207001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoiczFpM3ZpLmVncmVzcy50N2M3emwiLCJhY2NvdW50X2lkIjoiNzM0NTQ2MjA3MDAxIiwiZWhuIjoiZmFzdGx5LmxpdmUuYnJpZ2h0Y292ZS5jb20iLCJpc3MiOiJibGl2ZS1wbGF5YmFjay1zb3VyY2UtYXBpIiwic3ViIjoicGF0aG1hcHRva2VuIiwiYXVkIjpbIjczNDU0NjIwNzAwMSJdLCJqdGkiOiI2MzgwMzk2ODE5MTEyIn0.GDYp4IWtzwPkupEWeeOavnioVknO-Ev3UGlHvM1rE6I/playlist-hls.m3u8",
             "religious", "en", "usa", ["christian", "faith", "gospel", "news", "religious", "live"]),
     Channel("Catholic TV", "https://catholictvhd-lh.akamaized.net/hls/live/2043390/CTVLiveHD/master.m3u8",
             "religious", "en", "usa", ["catholic", "christian", "faith", "mass", "religious", "live"]),
@@ -370,76 +371,163 @@ CHANNELS = [
 ]
 
 
-# ── Stopwords & High-Priority Domain Keywords ────────────────────────────────
+# ── Normalization, Stopwords, Synonyms & Intent Mapping ──────────────────────
 
 STOP_WORDS = {
     "a", "an", "the", "and", "or", "with", "for", "to", "of", "in", "on", "at",
-    "i", "want", "watch", "open", "play", "show", "find", "channel",
-    "dua", "hap", "shiko", "kanal", "nje", "një", "me", "dhe", "ose", "per", "për"
+    "i", "am", "im", "want", "watch", "open", "play", "show", "find", "channel",
+    "put", "something", "some", "me", "please", "can", "you", "turn",
+    "dua", "hap", "shiko", "kanal", "nje", "me", "dhe", "ose", "per", "diqka",
+    "dicka", "ndonje", "ndonjë", "te", "ne"
 }
 
 FINANCE_KEYWORDS = {
     "finance", "financial", "markets", "market", "stocks", "stock", "economy",
-    "business", "bursa", "financa", "tregjet", "tregu"
+    "economic", "business", "trading", "crypto", "bursa", "financa", "tregjet",
+    "tregu", "ekonomi", "biznes"
 }
+
+SYNONYM_MAP = {
+    "entertaining": ["entertainment", "comedy", "movies", "fun"],
+    "entertain": ["entertainment", "comedy", "movies", "fun"],
+    "bored": ["entertainment", "comedy", "movies", "music", "fun"],
+    "fun": ["entertainment", "comedy", "music"],
+    "arguesim": ["entertainment", "music", "comedy"],
+    "argeim": ["entertainment", "music", "comedy"],
+    "arberim": ["entertainment"],
+    "cartoons": ["kids", "cartoons", "animation", "children"],
+    "cartoon": ["kids", "cartoons", "animation", "children"],
+    "vizatimor": ["kids", "cartoons", "animation", "children"],
+    "femije": ["kids", "children", "cartoons", "animation"],
+    "movie": ["movies", "cinema", "films", "entertainment"],
+    "movies": ["movies", "cinema", "films", "entertainment"],
+    "film": ["movies", "cinema", "films"],
+    "filma": ["movies", "cinema", "films"],
+    "sport": ["sports", "football", "soccer"],
+    "sports": ["sports", "football", "soccer"],
+    "football": ["sports", "football", "soccer"],
+    "soccer": ["sports", "football", "soccer"],
+    "futbol": ["sports", "football", "soccer"],
+    "ndeshje": ["sports", "football", "soccer"],
+    "news": ["news", "world", "politics", "breaking news"],
+    "lajme": ["news", "world", "politics"],
+    "music": ["music", "pop", "hits", "radio"],
+    "muzike": ["music", "pop", "hits", "radio"],
+    "kenga": ["music", "pop", "hits"],
+    "finance": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "financial": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "markets": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "market": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "stocks": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "economy": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "business": ["finance", "financial", "markets", "market", "stocks", "economy", "business"],
+    "bursa": ["finance", "financial", "markets", "stocks", "economy", "business"],
+    "financa": ["finance", "financial", "markets", "stocks", "economy", "business"],
+}
+
+
+def _normalize_text(text: str) -> str:
+    text = text.lower().strip()
+    text = text.replace("ë", "e").replace("ç", "c")
+    text = re.sub(r"[^a-z0-9\s\+\-&]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _expand_tokens(tokens: List[str]) -> List[str]:
+    expanded = list(tokens)
+    for tok in tokens:
+        if tok in SYNONYM_MAP:
+            expanded.extend(SYNONYM_MAP[tok])
+        elif tok.endswith("s") and len(tok) > 3 and tok[:-1] in SYNONYM_MAP:
+            expanded.extend(SYNONYM_MAP[tok[:-1]])
+        elif tok.endswith("ing") and len(tok) > 5:
+            stem = tok[:-3]
+            if stem in SYNONYM_MAP:
+                expanded.extend(SYNONYM_MAP[stem])
+            elif (stem + "e") in SYNONYM_MAP:
+                expanded.extend(SYNONYM_MAP[stem + "e"])
+
+    seen = set()
+    result = []
+    for item in expanded:
+        norm = _normalize_text(item)
+        if norm and norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    return result
 
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def get_channel(name: str):
-    name_lower = name.strip().lower()
+    name_norm = _normalize_text(name)
     for ch in CHANNELS:
-        if ch.name.lower() == name_lower:
+        if _normalize_text(ch.name) == name_norm:
             return _to_dict(ch)
     return None
 
 
 def find_best_channel(query: str):
-    query_lower = query.lower().strip()
-    words = [w for w in query_lower.split() if len(w) >= 2 and w not in STOP_WORDS]
+    query_norm = _normalize_text(query)
+    if not query_norm:
+        return None
+
+    raw_words = [w for w in query_norm.split() if len(w) >= 2 and w not in STOP_WORDS]
+    words = _expand_tokens(raw_words)
+
     best, best_score = None, 0
 
     for ch in CHANNELS:
         score = 0
-        name_lower = ch.name.lower()
-        tags = [t.lower() for t in (ch.tags or [])]
-        category_lower = (ch.category or "").lower()
+        name_norm = _normalize_text(ch.name)
+        tags = [_normalize_text(t) for t in (ch.tags or [])]
+        category_norm = _normalize_text(ch.category or "")
 
-        # 1. Përputhje e plotë ose me nënvarg te emri i kanalit
-        if query_lower == name_lower:
+        # 1. Exact or substring match on channel name
+        if query_norm == name_norm:
             score += 20
-        elif query_lower in name_lower:
+        elif query_norm in name_norm:
             score += 10
-        elif any(len(w) >= 3 and w in name_lower for w in words):
+        elif any(len(w) >= 3 and w in name_norm for w in words):
             score += 4
 
-        # 2. Përputhje te kategoria
-        if category_lower and category_lower in words:
-            score += 4
+        # 2. Category match
+        if category_norm and category_norm in words:
+            score += 5
 
-        # 3. Përputhje e fjalëve te etiketat (tags)
+        # 3. Tag / keyword match
         for w in words:
             if w in tags:
                 score += 8 if w in FINANCE_KEYWORDS else 4
-            elif len(w) >= 4 and any(w in t for t in tags):
+            elif len(w) >= 4 and any(w in t or t in w for t in tags):
                 score += 2
 
         if score > best_score:
             best_score = score
             best = ch
 
-    return _to_dict(best) if best else None
+    if best:
+        return _to_dict(best)
+
+    # Smart fallback for broad or mood-based queries
+    if any(k in query_norm for k in ("bored", "entertain", "fun", "movie", "arguesim", "film")):
+        for ch in CHANNELS:
+            if _normalize_text(ch.category) == "entertainment":
+                return _to_dict(ch)
+
+    return None
 
 
 def search_channels_by_tag(keyword: str):
-    keyword = keyword.lower()
+    keyword_norm = _normalize_text(keyword)
     return [_to_dict(ch) for ch in CHANNELS
-            if ch.tags and any(keyword in tag for tag in ch.tags)]
+            if ch.tags and any(keyword_norm in _normalize_text(tag) for tag in ch.tags)]
 
 
 def get_channels_by_category(category: str):
-    category = category.lower()
-    return [_to_dict(ch) for ch in CHANNELS if ch.category == category]
+    category_norm = _normalize_text(category)
+    return [_to_dict(ch) for ch in CHANNELS if _normalize_text(ch.category) == category_norm]
 
 
 def get_news_channels():
@@ -460,12 +548,12 @@ def get_kids_channels():
 
 def get_albanian_channels():
     return [_to_dict(ch) for ch in CHANNELS
-            if ch.tags and ("albanian" in ch.tags or "kosovo" in ch.tags or "albania" in ch.tags)]
+            if ch.tags and any(t in _normalize_text(" ".join(ch.tags)) for t in ("albanian", "kosovo", "albania"))]
 
 
 def get_balkan_channels():
     return [_to_dict(ch) for ch in CHANNELS
-            if ch.tags and "balkans" in ch.tags]
+            if ch.tags and any("balkan" in _normalize_text(tag) for tag in ch.tags)]
 
 
 def _to_dict(ch: Channel):
