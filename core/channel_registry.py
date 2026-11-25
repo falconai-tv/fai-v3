@@ -387,6 +387,12 @@ FINANCE_KEYWORDS = {
     "tregu", "ekonomi", "biznes"
 }
 
+ENGLISH_INDICATORS = {
+    "put", "on", "some", "cartoons", "kids", "want", "watch", "live", "sports",
+    "football", "show", "me", "world", "news", "play", "music", "bored",
+    "something", "entertaining", "movie", "channel", "financial", "markets"
+}
+
 SYNONYM_MAP = {
     "entertaining": ["entertainment", "comedy", "movies", "fun"],
     "entertain": ["entertainment", "comedy", "movies", "fun"],
@@ -458,6 +464,15 @@ def _expand_tokens(tokens: List[str]) -> List[str]:
     return result
 
 
+def _detect_query_language(query_norm: str) -> str:
+    words = set(query_norm.split())
+    if any(w in ENGLISH_INDICATORS for w in words):
+        return "en"
+    if any(w in {"dua", "hap", "shiko", "kanal", "femije", "lajme", "muzike", "futbol"} for w in words):
+        return "sq"
+    return "multi"
+
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def get_channel(name: str):
@@ -473,6 +488,7 @@ def find_best_channel(query: str):
     if not query_norm:
         return None
 
+    query_lang = _detect_query_language(query_norm)
     raw_words = [w for w in query_norm.split() if len(w) >= 2 and w not in STOP_WORDS]
     words = _expand_tokens(raw_words)
 
@@ -483,6 +499,7 @@ def find_best_channel(query: str):
         name_norm = _normalize_text(ch.name)
         tags = [_normalize_text(t) for t in (ch.tags or [])]
         category_norm = _normalize_text(ch.category or "")
+        ch_lang = (ch.language or "multi").lower()
 
         # 1. Exact or substring match on channel name
         if query_norm == name_norm:
@@ -503,6 +520,12 @@ def find_best_channel(query: str):
             elif len(w) >= 4 and any(w in t or t in w for t in tags):
                 score += 2
 
+        # 4. Language affinity boost
+        if query_lang == "en" and ch_lang in ("en", "multi"):
+            score += 3
+        elif query_lang == "sq" and ch_lang in ("sq", "multi"):
+            score += 3
+
         if score > best_score:
             best_score = score
             best = ch
@@ -512,6 +535,10 @@ def find_best_channel(query: str):
 
     # Smart fallback for broad or mood-based queries
     if any(k in query_norm for k in ("bored", "entertain", "fun", "movie", "arguesim", "film")):
+        target_lang = "en" if query_lang == "en" else "sq"
+        for ch in CHANNELS:
+            if _normalize_text(ch.category) == "entertainment" and ch.language in (target_lang, "multi"):
+                return _to_dict(ch)
         for ch in CHANNELS:
             if _normalize_text(ch.category) == "entertainment":
                 return _to_dict(ch)
