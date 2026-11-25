@@ -141,7 +141,7 @@ CHANNELS = [
     Channel("Animal Kingdom", "https://cdn6.goprimetime.info/feed/202306140918/LC18/index.m3u8",
             "education", "en", "global", ["animals", "nature", "wildlife", "documentary", "live"]),
     Channel("Classic Arts Showcase", "https://classicarts.akamaized.net/hls/live/1024257/CAS/master.m3u8",
-            "entertainment", "en", "usa", ["arts", "classical music", "opera", "ballet", "culture", "live"]),
+            "entertainment", "en", "usa", ["arts", "classical music", "opera", "ballet", "culture", "relaxing", "live"]),
     Channel("Create TV", "https://create.lls.pbs.org/index.m3u8",
             "lifestyle", "en", "usa", ["cooking", "travel", "diy", "pbs", "lifestyle", "live"]),
     Channel("PBS Kids", "https://livestream.pbskids.org/out/v1/14507d931bbe48a69287e4850e53443c/est.m3u8",
@@ -153,7 +153,7 @@ CHANNELS = [
     Channel("Mythbusters", "https://d1cgf0ptrv4t22.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-xvoparaodgcw9/Mythbusters_GB.m3u8",
             "education", "en", "uk", ["science", "experiments", "discovery", "entertainment", "live"]),
     Channel("FilmRise Classic TV", "https://d2tv4k5moji5m7.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-lu4pzh9l4b57p/master.m3u8",
-            "entertainment", "en", "usa", ["classic tv", "retro", "sitcoms", "nostalgia", "live"]),
+            "entertainment", "en", "usa", ["classic tv", "retro", "sitcoms", "nostalgia", "comedy", "live"]),
     Channel("The Archive Classic Movies", "https://cineverse.g-mana.live/media/09899328-5b22-4d3e-ba1e-111856798c99/playlist_3.m3u8",
             "entertainment", "en", "usa", ["movies", "classic movies", "cinema", "retro", "live"]),
     Channel("Comet", "https://fast-channels.sinclairstoryline.com/COMET/index.m3u8",
@@ -165,11 +165,11 @@ CHANNELS = [
     Channel("ION Plus", "https://cdn-uw2-prod.tsv2.amagi.tv/linear/amg01438-ewscrippscompan-ionplus-tablo/playlist.m3u8",
             "entertainment", "en", "usa", ["drama", "crime", "procedural", "series", "live"]),
     Channel("Bounce XL", "https://cdn-uw2-prod.tsv2.amagi.tv/linear/amg01438-ewscrippscompan-bouncexl-tablo/playlist.m3u8",
-            "entertainment", "en", "usa", ["movies", "sitcoms", "drama", "african american", "live"]),
+            "entertainment", "en", "usa", ["movies", "sitcoms", "drama", "comedy", "african american", "live"]),
     Channel("TVS Comedy Network", "https://rpn.bozztv.com/gusa/gusa-tvscomedy/index.m3u8",
-            "entertainment", "en", "usa", ["comedy", "sitcoms", "humor", "stand-up", "live"]),
+            "entertainment", "en", "usa", ["comedy", "sitcoms", "humor", "funny", "stand-up", "entertainment", "live"]),
     Channel("TVS Quiz Show Network", "https://rpn.bozztv.com/gusa/gusa-tvsgameshow/index.m3u8",
-            "entertainment", "en", "usa", ["game show", "quiz", "trivia", "entertainment", "live"]),
+            "entertainment", "en", "usa", ["game show", "quiz", "trivia", "funny", "entertainment", "live"]),
     Channel("Cloudflare TV", "https://cloudflare.tv/hls/live.m3u8",
             "education", "en", "usa", ["technology", "tech", "security", "engineering", "live"]),
     Channel("Free Speech TV", "https://edge.fstv-live-linear-channel.top.comcast.net/Content/HLS_HLSv3/Live/channel(b168a609-19c1-2203-ae1d-6b9726f05e67)/index.m3u8",
@@ -376,9 +376,9 @@ CHANNELS = [
 STOP_WORDS = {
     "a", "an", "the", "and", "or", "with", "for", "to", "of", "in", "on", "at",
     "i", "am", "im", "want", "watch", "open", "play", "show", "find", "channel",
-    "put", "something", "some", "me", "please", "can", "you", "turn",
+    "put", "something", "some", "me", "please", "can", "you", "turn", "what", "is",
     "dua", "hap", "shiko", "kanal", "nje", "me", "dhe", "ose", "per", "diqka",
-    "dicka", "ndonje", "ndonjë", "te", "ne"
+    "dicka", "ndonje", "ndonjë", "te", "ne", "ndoj", "cfare", "ka"
 }
 
 FINANCE_KEYWORDS = {
@@ -390,13 +390,22 @@ FINANCE_KEYWORDS = {
 ENGLISH_INDICATORS = {
     "put", "on", "some", "cartoons", "kids", "want", "watch", "live", "sports",
     "football", "show", "me", "world", "news", "play", "music", "bored",
-    "something", "entertaining", "movie", "channel", "financial", "markets"
+    "something", "entertaining", "funny", "relaxing", "movie", "channel",
+    "financial", "markets", "what", "is"
+}
+
+ALBANIAN_INDICATORS = {
+    "dua", "hap", "shiko", "kanal", "femije", "lajme", "muzike", "futbol",
+    "bursa", "financa", "ndoj", "film", "filma", "cfare", "ka", "arguesim",
+    "kosove", "kosovo", "shqiperi", "shqiperia"
 }
 
 SYNONYM_MAP = {
     "entertaining": ["entertainment", "comedy", "movies", "fun"],
     "entertain": ["entertainment", "comedy", "movies", "fun"],
     "bored": ["entertainment", "comedy", "movies", "music", "fun"],
+    "funny": ["comedy", "humor", "sitcoms", "entertainment"],
+    "relaxing": ["relaxing", "nature", "wildlife", "culture", "classical music"],
     "fun": ["entertainment", "comedy", "music"],
     "arguesim": ["entertainment", "music", "comedy"],
     "argeim": ["entertainment", "music", "comedy"],
@@ -407,8 +416,8 @@ SYNONYM_MAP = {
     "femije": ["kids", "children", "cartoons", "animation"],
     "movie": ["movies", "cinema", "films", "entertainment"],
     "movies": ["movies", "cinema", "films", "entertainment"],
-    "film": ["movies", "cinema", "films"],
-    "filma": ["movies", "cinema", "films"],
+    "film": ["movies", "cinema", "films", "entertainment"],
+    "filma": ["movies", "cinema", "films", "entertainment"],
     "sport": ["sports", "football", "soccer"],
     "sports": ["sports", "football", "soccer"],
     "football": ["sports", "football", "soccer"],
@@ -466,10 +475,16 @@ def _expand_tokens(tokens: List[str]) -> List[str]:
 
 def _detect_query_language(query_norm: str) -> str:
     words = set(query_norm.split())
-    if any(w in ENGLISH_INDICATORS for w in words):
-        return "en"
-    if any(w in {"dua", "hap", "shiko", "kanal", "femije", "lajme", "muzike", "futbol"} for w in words):
+    sq_hits = len(words & ALBANIAN_INDICATORS)
+    en_hits = len(words & ENGLISH_INDICATORS)
+    if sq_hits > en_hits:
         return "sq"
+    if en_hits > sq_hits:
+        return "en"
+    if sq_hits > 0:
+        return "sq"
+    if en_hits > 0:
+        return "en"
     return "multi"
 
 
@@ -503,45 +518,62 @@ def find_best_channel(query: str):
 
         # 1. Exact or substring match on channel name
         if query_norm == name_norm:
-            score += 20
+            score += 25
         elif query_norm in name_norm:
-            score += 10
+            score += 12
         elif any(len(w) >= 3 and w in name_norm for w in words):
-            score += 4
+            score += 5
 
         # 2. Category match
         if category_norm and category_norm in words:
-            score += 5
+            score += 6
 
         # 3. Tag / keyword match
         for w in words:
             if w in tags:
-                score += 8 if w in FINANCE_KEYWORDS else 4
+                score += 9 if w in FINANCE_KEYWORDS else 4
             elif len(w) >= 4 and any(w in t or t in w for t in tags):
                 score += 2
 
-        # 4. Language affinity boost
-        if query_lang == "en" and ch_lang in ("en", "multi"):
-            score += 3
-        elif query_lang == "sq" and ch_lang in ("sq", "multi"):
-            score += 3
+        # 4. Language affinity boost / penalty
+        if query_lang == "en":
+            if ch_lang == "en":
+                score += 6
+            elif ch_lang == "multi":
+                score += 3
+            elif ch_lang != "en":
+                score -= 2
+        elif query_lang == "sq":
+            if ch_lang == "sq":
+                score += 6
+            elif ch_lang == "multi":
+                score += 2
 
         if score > best_score:
             best_score = score
             best = ch
 
-    if best:
+    if best and best_score > 0:
         return _to_dict(best)
 
-    # Smart fallback for broad or mood-based queries
-    if any(k in query_norm for k in ("bored", "entertain", "fun", "movie", "arguesim", "film")):
-        target_lang = "en" if query_lang == "en" else "sq"
-        for ch in CHANNELS:
-            if _normalize_text(ch.category) == "entertainment" and ch.language in (target_lang, "multi"):
-                return _to_dict(ch)
+    # Smart fallback for broad, mood-based, or live queries
+    target_lang = "en" if query_lang == "en" else ("sq" if query_lang == "sq" else None)
+
+    if any(k in query_norm for k in ("bored", "entertain", "fun", "funny", "movie", "film", "arguesim", "relax")):
+        if target_lang:
+            for ch in CHANNELS:
+                if _normalize_text(ch.category) == "entertainment" and (ch.language or "").lower() == target_lang:
+                    return _to_dict(ch)
         for ch in CHANNELS:
             if _normalize_text(ch.category) == "entertainment":
                 return _to_dict(ch)
+
+    if "live" in query_norm or "cfare ka" in query_norm:
+        if target_lang:
+            for ch in CHANNELS:
+                if (ch.language or "").lower() == target_lang:
+                    return _to_dict(ch)
+        return _to_dict(CHANNELS[0]) if CHANNELS else None
 
     return None
 
