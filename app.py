@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -98,6 +99,13 @@ def _get_client_ip() -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return (request.remote_addr or "").strip()
+
+
+def _is_noisy_movie_title(title: str) -> bool:
+    low = (title or "").strip().lower()
+    if not low or len(low) < 2:
+        return True
+    return bool(re.search(r"\b(vs\.?|eagles|cowboys|nfl|super bowl|highlights?)\b", low))
 
 
 def _normalize_movie_item(item: dict) -> dict:
@@ -268,35 +276,48 @@ def handle_movie_find():
 
     try:
         raw_results = []
-        meta = {}
+        meta = {"engine": "none", "note": "No live movie candidates found."}
 
         if tubi_finder:
             res = tubi_finder.find_by_description(query, top_k=top_k)
-            raw_results = res.get("results") or []
-            if raw_results:
-                meta = {
-                    "engine": "TubiDescriptionFinder",
-                    "extracted_keywords": res.get("extracted_keywords", []),
-                }
+            filtered = [
+                r for r in (res.get("results") or [])
+                if not _is_noisy_movie_title(r.get("title", ""))
+            ]
+            meta = {
+                "engine": "TubiDescriptionFinder",
+                "extracted_keywords": res.get("extracted_keywords", []),
+            }
+            if filtered:
+                raw_results = filtered
 
         if not raw_results and tubi_semantic:
             sem_deep = tubi_semantic.search_tubi_deep(query, top_k=top_k)
-            raw_results = sem_deep.get("results") or []
-            if raw_results:
-                meta = {
-                    "engine": "AdvancedTubiSemanticEngine",
-                    "search_terms": sem_deep.get("search_terms"),
-                    "cognitive_intent_vector": sem_deep.get("cognitive_intent_vector", {}),
-                }
+            filtered = [
+                r for r in (sem_deep.get("results") or [])
+                if not _is_noisy_movie_title(r.get("title", ""))
+            ]
+            meta = {
+                "engine": "AdvancedTubiSemanticEngine",
+                "search_terms": sem_deep.get("search_terms"),
+                "cognitive_intent_vector": sem_deep.get("cognitive_intent_vector", {}),
+            }
+            if filtered:
+                raw_results = filtered
 
         if not raw_results and semantic_movie_engine:
             sem_res = semantic_movie_engine.search(query, top_k=top_k)
-            raw_results = sem_res.get("results") or []
+            filtered = [
+                r for r in (sem_res.get("results") or [])
+                if not _is_noisy_movie_title(r.get("title", ""))
+            ]
             meta = {
                 "engine": "SemanticMovieEngine",
                 "concrete_terms_used": sem_res.get("concrete_terms_used", []),
-                "note": sem_res.get("note"),
+                "note": sem_res.get("note") or "No live Tubi movie candidates found.",
             }
+            if filtered:
+                raw_results = filtered
 
         if not any([tubi_finder, tubi_semantic, semantic_movie_engine]):
             return jsonify({"status": "error", "message": "No Tubi movie engine available"}), 500
