@@ -56,6 +56,18 @@ except Exception as e:
     logger.error(f"Gabim gjatë ngarkimit të WebEngine: {e}")
     web_engine = None
 
+try:
+    from engines.music_engine import MusicEngine
+    yt_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    try:
+        music_engine = MusicEngine(api_key=yt_key) if yt_key else MusicEngine()
+    except TypeError:
+        music_engine = MusicEngine()
+    logger.info("MusicEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të MusicEngine: {e}")
+    music_engine = None
+
 
 def _get_client_ip() -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
@@ -73,7 +85,8 @@ def index():
         "channel_finder": "active" if smart_channel_finder else "inactive",
         "background_engine": "active" if background_engine else "inactive",
         "weather_engine": "active" if weather_engine else "inactive",
-        "web_engine": "active" if web_engine else "inactive"
+        "web_engine": "active" if web_engine else "inactive",
+        "music_engine": "active" if music_engine else "inactive"
     }), 200
 
 
@@ -146,6 +159,43 @@ def handle_news():
     intent = data.get('intent')
     res = web_engine.run_news_engine(query=query, intent=intent, category=category)
     return jsonify(res), 200
+
+
+@app.route('/music', methods=['GET', 'POST'])
+def handle_music():
+    if not music_engine:
+        return jsonify({"status": "error", "message": "Music engine unavailable"}), 500
+
+    if request.method == 'GET':
+        query = (
+            request.args.get('query')
+            or request.args.get('q')
+            or request.args.get('text')
+            or ''
+        ).strip()
+        intent = (request.args.get('intent') or 'play_music').strip()
+    else:
+        data = request.get_json(silent=True) or {}
+        query = (data.get('query') or data.get('text') or data.get('message') or '').strip()
+        intent = (data.get('intent') or 'play_music').strip()
+
+    if not query:
+        return jsonify({"status": "error", "message": "Missing 'query'"}), 400
+
+    try:
+        if hasattr(music_engine, "search"):
+            res = music_engine.search(query)
+        elif hasattr(music_engine, "find"):
+            res = music_engine.find(query)
+        elif hasattr(music_engine, "process"):
+            res = music_engine.process(query=query, intent=intent)
+        else:
+            return jsonify({"status": "error", "message": "No matching method on MusicEngine"}), 500
+
+        return jsonify(res), 200
+    except Exception as e:
+        logger.error(f"Gabim gjatë ekzekutimit të MusicEngine: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route('/chat', methods=['POST'])
