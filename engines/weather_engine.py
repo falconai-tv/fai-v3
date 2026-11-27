@@ -21,6 +21,15 @@ SPEAK_ON_SERVER = os.getenv("WEATHER_SPEAK", "false").lower() == "true"
 IP_CACHE_TTL = 6 * 3600
 IP_CACHE_MAX = 5000
 
+PRISHTINA_COORDS = (42.6629, 21.1655)
+
+CITY_ALIASES = {
+    "prishtina": "Prishtina",
+    "prishtinë": "Prishtina",
+    "pristina": "Prishtina",
+    "prishtine": "Prishtina",
+}
+
 WEATHER_ICONS = {
     "clear sky": "☀️",
     "few clouds": "🌤️",
@@ -92,6 +101,25 @@ def _valid_coords(lat, lon):
     return None, None
 
 
+def _canonical_city_name(city):
+    if not city:
+        return city
+    cleaned = city.strip()
+    key = cleaned.lower()
+    if key in CITY_ALIASES:
+        return CITY_ALIASES[key]
+    return cleaned.title()
+
+
+def _query_city_for_api(city):
+    if not city:
+        return city
+    key = city.strip().lower()
+    if key in CITY_ALIASES and CITY_ALIASES[key] == "Prishtina":
+        return "Pristina"
+    return city.strip()
+
+
 class WeatherEngine:
     def __init__(self, api_key=None):
         self.api_key = api_key or API_KEY
@@ -107,7 +135,7 @@ class WeatherEngine:
         if public:
             cached = self._ip_cache.get(ip)
             if cached and time.time() - cached[1] < IP_CACHE_TTL:
-                return cached[0]
+                return _canonical_city_name(cached[0])
             url = f"https://ipapi.co/{ip}/json/"
         else:
             url = "https://ipapi.co/json/"
@@ -124,68 +152,98 @@ class WeatherEngine:
 
         if not city:
             logger.info(f"[WEATHER] No city from IP, using default '{DEFAULT_CITY}'")
-            return DEFAULT_CITY
+            return _canonical_city_name(DEFAULT_CITY)
+
+        canonical = _canonical_city_name(city)
 
         if public:
             if len(self._ip_cache) >= IP_CACHE_MAX:
                 self._ip_cache.clear()
-            self._ip_cache[ip] = (city, time.time())
+            self._ip_cache[ip] = (canonical, time.time())
 
-        logger.info(f"[WEATHER] IP detected city: {city}")
-        return city
+        logger.info(f"[WEATHER] IP detected city: {canonical}")
+        return canonical
 
     def extract_city(self, query):
         words = re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", (query or "").lower())
         city_words = [w for w in words if w not in STOPWORDS and len(w) > 1]
-        return " ".join(city_words).title() if city_words else None
+        if not city_words:
+            return None
+        joined = " ".join(city_words)
+        return _canonical_city_name(joined)
+
+    def _is_prishtina(self, city=None, lat=None, lon=None):
+        if city and city.strip().lower() in CITY_ALIASES and CITY_ALIASES[city.strip().lower()] == "Prishtina":
+            return True
+        if lat is not None and lon is not None:
+            p_lat, p_lon = PRISHTINA_COORDS
+            if abs(float(lat) - p_lat) < 0.05 and abs(float(lon) - p_lon) < 0.05:
+                return True
+        return False
 
     def fetch_weather(self, city=None, lat=None, lon=None):
+        is_pr = self._is_prishtina(city=city, lat=lat, lon=lon)
+        if is_pr and lat is None and lon is None:
+            lat, lon = PRISHTINA_COORDS
+
+        api_city = _query_city_for_api(city)
+
         if self.api_key:
             params = {"appid": self.api_key, "units": "metric", "lang": "en"}
             if lat is not None and lon is not None:
                 params["lat"], params["lon"] = lat, lon
                 target = "coordinates"
-            elif city:
-                params["q"] = city
-                target = f"'{city}'"
+            elif api_city:
+                params["q"] = api_city
+                target = f"'{api_city}'"
             else:
                 target = "unknown"
 
             try:
                 response = requests.get(self.base_url, params=params, timeout=5)
                 if response.status_code == 200:
-                    return response.json()
+                    payload = response.json()
+                    if is_pr:
+                        payload["name"] = "Prishtina"
+                    return payload
                 logger.warning(f"[WEATHER] OpenWeather returned HTTP {response.status_code} for {target}")
             except Exception as e:
                 logger.warning(f"[WEATHER] OpenWeather request failed for {target}: {e}")
 
-        return self.fetch_open_meteo(city=city, lat=lat, lon=lon)
+        raw = self.fetch_open_meteo(city=api_city, lat=lat, lon=lon)
+        if raw and is_pr:
+            raw["name"] = "Prishtina"
+        return raw
 
     def fetch_open_meteo(self, city=None, lat=None, lon=None):
         try:
-            resolved_name = city or "Current Location"
+            is_pr = self._is_prishtina(city=city, lat=lat, lon=lon)
+            resolved_name = "Prishtina" if is_pr else (_canonical_city_name(city) or "Current Location")
             resolved_country = ""
 
             if lat is None or lon is None:
-                if not city:
-                    return None
-                geo_resp = requests.get(
-                    "https://geocoding-api.open-meteo.com/v1/search",
-                    params={"name": city, "count": 1, "language": "en", "format": "json"},
-                    timeout=5,
-                )
-                if geo_resp.status_code != 200:
-                    logger.warning(f"[WEATHER] Open-Meteo geocoding HTTP {geo_resp.status_code} for '{city}'")
-                    return None
-                results = (geo_resp.json() or {}).get("results") or []
-                if not results:
-                    logger.warning(f"[WEATHER] Open-Meteo found no location for '{city}'")
-                    return None
-                place = results[0]
-                lat = place.get("latitude")
-                lon = place.get("longitude")
-                resolved_name = place.get("name") or city
-                resolved_country = place.get("country_code") or ""
+                if is_pr:
+                    lat, lon = PRISHTINA_COORDS
+                else:
+                    if not city:
+                        return None
+                    geo_resp = requests.get(
+                        "https://geocoding-api.open-meteo.com/v1/search",
+                        params={"name": city, "count": 1, "language": "en", "format": "json"},
+                        timeout=5,
+                    )
+                    if geo_resp.status_code != 200:
+                        logger.warning(f"[WEATHER] Open-Meteo geocoding HTTP {geo_resp.status_code} for '{city}'")
+                        return None
+                    results = (geo_resp.json() or {}).get("results") or []
+                    if not results:
+                        logger.warning(f"[WEATHER] Open-Meteo found no location for '{city}'")
+                        return None
+                    place = results[0]
+                    lat = place.get("latitude")
+                    lon = place.get("longitude")
+                    resolved_name = _canonical_city_name(place.get("name") or city)
+                    resolved_country = place.get("country_code") or ""
 
             wx_resp = requests.get(
                 "https://api.open-meteo.com/v1/forecast",
@@ -228,7 +286,8 @@ class WeatherEngine:
             return None
 
     def build_response(self, data, source="query"):
-        city = data.get("name") or "your area"
+        raw_city = data.get("name") or "your area"
+        city = _canonical_city_name(raw_city)
         country = (data.get("sys") or {}).get("country", "")
         place = f"{city}, {country}" if country else city
 
@@ -295,7 +354,7 @@ class WeatherEngine:
             logger.info(f"[WEATHER] Fetched via {source}")
 
             if not raw:
-                return self.error_response(query, city if source == "query" else None)
+                return self.error_response(query, _canonical_city_name(city) if source == "query" else None)
 
             result = self.build_response(raw, source)
 
@@ -319,8 +378,9 @@ class WeatherEngine:
         return self.process(query, ip=ip, lat=lat, lon=lon)
 
     def error_response(self, query, city=None):
-        if city:
-            text = f"Sorry, I couldn't find weather for '{city}'. Check the spelling or try another city."
+        canonical = _canonical_city_name(city) if city else None
+        if canonical:
+            text = f"Sorry, I couldn't find weather for '{canonical}'. Check the spelling or try another city."
         else:
             text = "Sorry, I couldn't get the weather. Please try again."
 
