@@ -78,7 +78,8 @@ STOPWORDS = {
     "tonight", "now", "current", "currently", "right", "forecast", "report",
     "update", "temperature", "cold", "hot", "warm", "outside", "tell", "me",
     "about", "give", "show", "please", "do", "does", "i", "need", "check",
-    "this", "week", "weekend", "rain", "raining", "sunny", "windy", "cloudy"
+    "this", "week", "weekend", "rain", "raining", "sunny", "windy", "cloudy",
+    "moti", "ne", "në", "sot", "neser", "nesër", "si", "eshte", "është", "per", "për"
 }
 
 
@@ -166,6 +167,9 @@ class WeatherEngine:
 
     def extract_city(self, query):
         words = re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", (query or "").lower())
+        for w in words:
+            if w in CITY_ALIASES:
+                return CITY_ALIASES[w]
         city_words = [w for w in words if w not in STOPWORDS and len(w) > 1]
         if not city_words:
             return None
