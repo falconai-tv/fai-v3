@@ -14,6 +14,16 @@ logger = logging.getLogger("FalconAI.SemanticMovieEngine")
 _model = None
 _EMBEDDINGS_DISABLED = False
 
+NOISE_TITLE_PATTERNS = (
+    r"\bvs\.?\b",
+    r"\beagles\b",
+    r"\bcowboys\b",
+    r"\bnfl\b",
+    r"\bsuper bowl\b",
+    r"\bhighlights?\b",
+    r"\bepisode\s+\d+\b",
+)
+
 TAXONOMY = [
     "psychological drama",
     "internal grief and loss",
@@ -68,36 +78,16 @@ TAXONOMY = [
     "quiet character study",
 ]
 
-CURATED_FALLBACKS = [
-    {
-        "title": "Manchester by the Sea",
-        "platform": "Tubi TV",
-        "url": "https://tubitv.com/search/Manchester%20by%20the%20Sea",
-        "match_score": 0.85,
-        "matched_via_term": "internal grief and loss",
-        "source": "Curated Fallback",
-    },
-    {
-        "title": "Arrival",
-        "platform": "Tubi TV",
-        "url": "https://tubitv.com/search/Arrival",
-        "match_score": 0.80,
-        "matched_via_term": "existential philosophical drama",
-        "source": "Curated Fallback",
-    },
-    {
-        "title": "Blade Runner 2049",
-        "platform": "Tubi TV",
-        "url": "https://tubitv.com/search/Blade%20Runner%202049",
-        "match_score": 0.78,
-        "matched_via_term": "slow atmospheric cinema",
-        "source": "Curated Fallback",
-    },
-]
-
 _TERM_SKIP_WORDS = {
     "and", "the", "of", "in", "to", "a", "an", "for", "with", "style", "story"
 }
+
+
+def _is_noisy_title(title: str) -> bool:
+    low = (title or "").strip().lower()
+    if not low or len(low) < 2:
+        return True
+    return any(re.search(pat, low) for pat in NOISE_TITLE_PATTERNS)
 
 
 def _embeddings_enabled() -> bool:
@@ -251,7 +241,7 @@ def _scrape_tubi(term: str, timeout: int = 4):
         for block in parser.json_data:
             for item in _iter_jsonld_items(block):
                 title = html.unescape(str(item.get("name") or "")).strip()
-                if not title:
+                if _is_noisy_title(title):
                     continue
                 link = str(item.get("url") or url).strip()
                 if not link.startswith("http"):
@@ -269,7 +259,7 @@ def _scrape_tubi(term: str, timeout: int = 4):
             for link, raw_title in re.findall(pattern, raw_html, re.DOTALL | re.IGNORECASE):
                 clean_title = html.unescape(re.sub(r"<.*?>", " ", raw_title))
                 clean_title = re.sub(r"\s+", " ", clean_title).strip()
-                if len(clean_title) >= 2:
+                if not _is_noisy_title(clean_title):
                     candidates.append({
                         "title": clean_title,
                         "description": "",
@@ -329,8 +319,8 @@ class SemanticMovieEngine:
             return {
                 "original_query": query,
                 "concrete_terms_used": [t for t, _ in concrete_terms],
-                "results": CURATED_FALLBACKS[:top_k],
-                "note": "Returned curated fallback recommendations.",
+                "results": [],
+                "note": "No live Tubi movie candidates found.",
             }
 
         model = _get_model()
@@ -351,6 +341,7 @@ class SemanticMovieEngine:
                         "title": cand["title"],
                         "platform": "Tubi TV",
                         "url": cand["url"],
+                        "description": cand.get("description", ""),
                         "match_score": round(float(score), 3),
                         "matched_via_term": cand["matched_term"],
                         "source": cand.get("source", "Tubi"),
@@ -375,6 +366,7 @@ class SemanticMovieEngine:
                 "title": cand["title"],
                 "platform": "Tubi TV",
                 "url": cand["url"],
+                "description": cand.get("description", ""),
                 "match_score": score,
                 "matched_via_term": cand["matched_term"],
                 "source": cand.get("source", "Tubi"),
