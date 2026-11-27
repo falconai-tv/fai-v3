@@ -68,6 +68,30 @@ except Exception as e:
     logger.error(f"Gabim gjatë ngarkimit të MusicEngine: {e}")
     music_engine = None
 
+try:
+    from engines.tubi_description_finder import TubiDescriptionFinder
+    tubi_finder = TubiDescriptionFinder()
+    logger.info("TubiDescriptionFinder u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të TubiDescriptionFinder: {e}")
+    tubi_finder = None
+
+try:
+    from engines.tubi_semantic_scraper import AdvancedTubiSemanticEngine
+    tubi_semantic = AdvancedTubiSemanticEngine()
+    logger.info("AdvancedTubiSemanticEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të AdvancedTubiSemanticEngine: {e}")
+    tubi_semantic = None
+
+try:
+    from engines.semantic_movie_engine import SemanticMovieEngine
+    semantic_movie_engine = SemanticMovieEngine()
+    logger.info("SemanticMovieEngine u ngarkua me sukses.")
+except Exception as e:
+    logger.error(f"Gabim gjatë ngarkimit të SemanticMovieEngine: {e}")
+    semantic_movie_engine = None
+
 
 def _get_client_ip() -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
@@ -76,8 +100,22 @@ def _get_client_ip() -> str:
     return (request.remote_addr or "").strip()
 
 
+def _normalize_movie_item(item: dict) -> dict:
+    return {
+        "title": item.get("title", ""),
+        "platform": item.get("platform", "Tubi TV"),
+        "url": item.get("url", ""),
+        "description": item.get("description", ""),
+        "source": item.get("source", "Tubi"),
+        "score": item.get("score", item.get("match_score", 0)),
+        "matched_keywords": item.get("matched_keywords", []),
+        "reasoning": item.get("reasoning", item.get("matched_via_term", "")),
+    }
+
+
 @app.route('/', methods=['GET'])
 def index():
+    movie_active = any([tubi_finder, tubi_semantic, semantic_movie_engine])
     return jsonify({
         "status": "online",
         "service": "FalconAI Engine v3 API",
@@ -86,7 +124,8 @@ def index():
         "background_engine": "active" if background_engine else "inactive",
         "weather_engine": "active" if weather_engine else "inactive",
         "web_engine": "active" if web_engine else "inactive",
-        "music_engine": "active" if music_engine else "inactive"
+        "music_engine": "active" if music_engine else "inactive",
+        "movie_engine": "active" if movie_active else "inactive"
     }), 200
 
 
@@ -198,6 +237,82 @@ def handle_music():
         return jsonify(res), 200
     except Exception as e:
         logger.error(f"Gabim gjatë ekzekutimit të MusicEngine: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/movie/find', methods=['GET', 'POST'])
+@app.route('/movie/play', methods=['POST'])
+def handle_movie_find():
+    if request.method == 'GET':
+        query = (
+            request.args.get('q')
+            or request.args.get('query')
+            or request.args.get('description')
+            or request.args.get('text')
+            or ''
+        ).strip()
+        top_k = int(request.args.get('top_k') or 3)
+    else:
+        data = request.get_json(silent=True) or {}
+        query = (
+            data.get('description')
+            or data.get('query')
+            or data.get('text')
+            or data.get('message')
+            or ''
+        ).strip()
+        top_k = int(data.get('top_k') or 3)
+
+    if not query:
+        return jsonify({"status": "error", "message": "Missing movie description/query"}), 400
+
+    try:
+        raw_results = []
+        meta = {}
+
+        if tubi_finder:
+            res = tubi_finder.find_by_description(query, top_k=top_k)
+            raw_results = res.get("results") or []
+            if raw_results:
+                meta = {
+                    "engine": "TubiDescriptionFinder",
+                    "extracted_keywords": res.get("extracted_keywords", []),
+                }
+
+        if not raw_results and tubi_semantic:
+            sem_deep = tubi_semantic.search_tubi_deep(query, top_k=top_k)
+            raw_results = sem_deep.get("results") or []
+            if raw_results:
+                meta = {
+                    "engine": "AdvancedTubiSemanticEngine",
+                    "search_terms": sem_deep.get("search_terms"),
+                    "cognitive_intent_vector": sem_deep.get("cognitive_intent_vector", {}),
+                }
+
+        if not raw_results and semantic_movie_engine:
+            sem_res = semantic_movie_engine.search(query, top_k=top_k)
+            raw_results = sem_res.get("results") or []
+            meta = {
+                "engine": "SemanticMovieEngine",
+                "concrete_terms_used": sem_res.get("concrete_terms_used", []),
+                "note": sem_res.get("note"),
+            }
+
+        if not any([tubi_finder, tubi_semantic, semantic_movie_engine]):
+            return jsonify({"status": "error", "message": "No Tubi movie engine available"}), 500
+
+        results = [_normalize_movie_item(item) for item in raw_results[:top_k]]
+        top_match = results[0] if results else None
+
+        return jsonify({
+            "status": "ok",
+            "type": "movie",
+            "data": top_match,
+            "results": results,
+            "meta": meta,
+        }), 200
+    except Exception as e:
+        logger.error(f"Gabim te movie finder: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
