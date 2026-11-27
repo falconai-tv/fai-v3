@@ -81,23 +81,35 @@ class _TubiMetaParser(HTMLParser):
         super().__init__()
         self.jsonld_blocks = []
         self.meta_desc = ""
+        self.movie_links = []
         self._in_jsonld = False
+        self._in_movie_link = False
+        self._current_href = ""
         self._buf = []
+        self._link_buf = []
 
     def handle_starttag(self, tag, attrs):
+        t = tag.lower()
         attrs_map = {k.lower(): v for k, v in attrs if k}
-        if tag.lower() == "script" and attrs_map.get("type") == "application/ld+json":
+        if t == "script" and attrs_map.get("type") == "application/ld+json":
             self._in_jsonld = True
             self._buf = []
-        elif tag.lower() == "meta":
+        elif t == "meta":
             m_name = (attrs_map.get("name") or attrs_map.get("property") or "").lower()
             if m_name in ("description", "og:description", "twitter:description"):
                 content = (attrs_map.get("content") or "").strip()
                 if len(content) > len(self.meta_desc):
                     self.meta_desc = html.unescape(content)
+        elif t == "a":
+            href = (attrs_map.get("href") or "").strip()
+            if re.match(r"^/movies/\d+/[^/?#]+", href):
+                self._in_movie_link = True
+                self._current_href = href
+                self._link_buf = []
 
     def handle_endtag(self, tag):
-        if tag.lower() == "script" and self._in_jsonld:
+        t = tag.lower()
+        if t == "script" and self._in_jsonld:
             self._in_jsonld = False
             raw = "".join(self._buf).strip()
             self._buf = []
@@ -106,10 +118,20 @@ class _TubiMetaParser(HTMLParser):
                     self.jsonld_blocks.append(json.loads(raw))
                 except Exception:
                     pass
+        elif t == "a" and self._in_movie_link:
+            self._in_movie_link = False
+            raw_title = html.unescape("".join(self._link_buf))
+            clean_title = re.sub(r"\s+", " ", raw_title).strip()
+            if clean_title and self._current_href:
+                self.movie_links.append((clean_title, self._current_href))
+            self._current_href = ""
+            self._link_buf = []
 
     def handle_data(self, data):
         if self._in_jsonld:
             self._buf.append(data)
+        elif self._in_movie_link:
+            self._link_buf.append(data)
 
 
 class TubiDescriptionFinder:
@@ -125,9 +147,9 @@ class TubiDescriptionFinder:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-    def _fetch_text(self, url: str, max_bytes: int = 1_500_000) -> str:
+    def _fetch_text(self, url: str, max_bytes: int = 1_500_000, timeout: int | None = None) -> str:
         req = urllib.request.Request(url, headers=self.headers)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
             return resp.read(max_bytes).decode("utf-8", errors="ignore")
 
     def extract_keywords(self, description_query: str, max_terms: int = 5) -> list[str]:
@@ -176,28 +198,73 @@ class TubiDescriptionFinder:
         for term in terms_to_try:
             if not term:
                 continue
-            url = f"https://tubitv.com/search/{urllib.parse.quote(term)}"
+            search_url = f"https://tubitv.com/search/{urllib.parse.quote(term)}"
             try:
-                raw_html = self._fetch_text(url)
+                raw_html = self._fetch_text(search_url)
                 parser = _TubiMetaParser()
                 parser.feed(raw_html)
+
                 for block in parser.jsonld_blocks:
                     for item in self._iter_media_items(block):
                         title = html.unescape(str(item.get("name") or "")).strip()
                         if not title or title.lower() in NOISE_TITLES:
                             continue
                         desc = html.unescape(str(item.get("description") or "")).strip()
-                        if not desc:
-                            continue
+                        raw_url = str(item.get("url") or "").strip()
+                        if raw_url.startswith("/"):
+                            full_url = f"https://tubitv.com{raw_url}"
+                        elif raw_url.startswith("http"):
+                            full_url = raw_url
+                        else:
+                            full_url = f"https://tubitv.com/search/{urllib.parse.quote(title)}"
                         candidates.append({
                             "title": title,
                             "description": desc,
-                            "url": f"https://tubitv.com/search/{urllib.parse.quote(title)}",
+                            "url": full_url,
                             "source": "Tubi JSON-LD",
                         })
+
+                for link_title, href in parser.movie_links:
+                    if link_title.lower() in NOISE_TITLES:
+                        continue
+                    candidates.append({
+                        "title": link_title,
+                        "description": "",
+                        "url": f"https://tubitv.com{href}",
+                        "source": "Tubi Catalog Link",
+                    })
             except Exception as exc:
                 logger.debug("Tubi candidate fetch skipped for '%s': %s", term, exc)
         return candidates
+
+    def _fetch_tubi_description_for_title(self, title: str, current_url: str = "") -> tuple[str, str]:
+        target_url = (
+            current_url
+            if current_url.startswith("https://tubitv.com/movies/")
+            else f"https://tubitv.com/search/{urllib.parse.quote(title)}"
+        )
+        try:
+            raw_html = self._fetch_text(target_url, max_bytes=1_000_000, timeout=3)
+            parser = _TubiMetaParser()
+            parser.feed(raw_html)
+
+            for block in parser.jsonld_blocks:
+                for item in self._iter_media_items(block):
+                    desc = html.unescape(str(item.get("description") or "")).strip()
+                    item_url = str(item.get("url") or "").strip()
+                    resolved_url = (
+                        f"https://tubitv.com{item_url}"
+                        if item_url.startswith("/")
+                        else (item_url if item_url.startswith("http") else target_url)
+                    )
+                    if desc:
+                        return desc, resolved_url
+
+            if parser.meta_desc:
+                return parser.meta_desc, target_url
+        except Exception as exc:
+            logger.debug("Tubi description lookup skipped for '%s': %s", title, exc)
+        return "", target_url
 
     def _query_wikipedia_entries(self, search_query: str) -> list[dict]:
         api_url = (
@@ -242,7 +309,6 @@ class TubiDescriptionFinder:
         return results
 
     def _search_open_web_movie_descriptions(self, search_terms: list[str]) -> list[dict]:
-        """Kërkon dinamikisht në Wikipedia API për filma ose dokumentarë që përputhen me përshkrimin."""
         if not search_terms:
             return []
 
@@ -277,18 +343,13 @@ class TubiDescriptionFinder:
         desc_hits = sum(1 for w in matched if w in desc)
         expanded_hits = sum(1 for term in expanded_terms if term in desc)
 
-        if desc_hits == 0 and expanded_hits == 0:
-            return 0.0, []
-
-        high_signal_tokens = {w for w in q_tokens if len(w) >= 5 and w not in BROAD_CONTEXT_WORDS}
-        if high_signal_tokens and not (high_signal_tokens & combined_words):
+        if desc_hits == 0 and expanded_hits == 0 and not (q_tokens & set(re.findall(r"\b[a-z]{3,}\b", title))):
             return 0.0, []
 
         media_hits = len(combined_words & MEDIA_POSITIVE_TERMS)
         company_hits = len(combined_words & COMPANY_PENALTY_TERMS)
         broad_only_hits = sum(1 for w in matched if w in BROAD_CONTEXT_WORDS)
 
-        # Penalizo emra personash/biografi që nuk kanë sinjale filmi/dokumentari
         looks_like_person_bio = (
             not candidate.get("is_explicit_media_page")
             and media_hits == 0
@@ -296,7 +357,7 @@ class TubiDescriptionFinder:
             and bool(re.match(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$", candidate.get("title") or ""))
         )
 
-        multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.5
+        multi_match_bonus = (desc_hits - 1) * 2.0 if desc_hits >= 2 else -1.0
         specificity_bonus = sum(min(len(w) / 10.0, 1.0) for w in matched if w not in BROAD_CONTEXT_WORDS)
         media_bonus = (3.5 if candidate.get("is_explicit_media_page") else 0.0) + min(media_hits * 0.8, 2.4)
         company_penalty = (
@@ -335,8 +396,18 @@ class TubiDescriptionFinder:
 
         for cand in candidates:
             norm_title = cand["title"].lower()
-            if norm_title in seen_titles:
+            if norm_title in seen_titles or norm_title in NOISE_TITLES:
                 continue
+
+            if not cand.get("description"):
+                tubi_desc, tubi_url = self._fetch_tubi_description_for_title(
+                    cand["title"], cand.get("url", "")
+                )
+                if tubi_desc:
+                    cand["description"] = tubi_desc
+                if tubi_url:
+                    cand["url"] = tubi_url
+
             score, matched_words = self._score_description_match(description_query, expanded_terms, cand)
             if score <= 0:
                 continue
