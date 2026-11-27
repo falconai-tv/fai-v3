@@ -320,6 +320,8 @@ class TubiDescriptionFinder:
             if not candidates and len(search_terms) >= 2:
                 fallback_terms = " ".join(search_terms[:2])
                 candidates = self._query_wikipedia_entries(f"({fallback_terms}) (film OR movie)")
+            if not candidates:
+                candidates = self._query_wikipedia_entries(f"{search_terms[0]} film")
             return candidates
         except Exception as exc:
             logger.warning("Open web movie search failed for '%s': %s", primary_query, exc)
@@ -343,7 +345,7 @@ class TubiDescriptionFinder:
         desc_hits = sum(1 for w in matched if w in desc)
         expanded_hits = sum(1 for term in expanded_terms if term in desc)
 
-        if desc_hits == 0 and expanded_hits == 0 and not (q_tokens & set(re.findall(r"\b[a-z]{3,}\b", title))):
+        if not matched and not candidate.get("is_explicit_media_page"):
             return 0.0, []
 
         media_hits = len(combined_words & MEDIA_POSITIVE_TERMS)
