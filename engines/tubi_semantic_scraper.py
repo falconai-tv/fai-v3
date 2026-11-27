@@ -18,57 +18,6 @@ NOISE_TITLE_PATTERNS = (
     r"\bepisode\s+\d+\b",
 )
 
-CURATED_FALLBACK_MOVIES = {
-    "internal_tragedy": [
-        {
-            "title": "Manchester by the Sea",
-            "description": "An uncle is asked to take care of his teenage nephew after the boy's father dies, confronting deep internal grief.",
-            "url": "https://tubitv.com/search/Manchester%20by%20the%20Sea",
-        },
-        {
-            "title": "Aftersun",
-            "description": "A daughter reflects on the shared joy and private melancholy of a holiday she took with her father.",
-            "url": "https://tubitv.com/search/Aftersun",
-        },
-    ],
-    "existential": [
-        {
-            "title": "Arrival",
-            "description": "A linguist works with the military to communicate with alien lifeforms, reshaping her perception of time and memory.",
-            "url": "https://tubitv.com/search/Arrival",
-        },
-        {
-            "title": "Solaris",
-            "description": "A psychologist travels to a space station orbiting a mysterious ocean planet that mirrors human memory.",
-            "url": "https://tubitv.com/search/Solaris",
-        },
-    ],
-    "intellectual_thriller": [
-        {
-            "title": "Memento",
-            "description": "A man with short-term memory loss uses notes and tattoos to track down his wife's killer.",
-            "url": "https://tubitv.com/search/Memento",
-        },
-        {
-            "title": "Prisoners",
-            "description": "When his daughter and her friend go missing, a desperate father takes matters into his own hands.",
-            "url": "https://tubitv.com/search/Prisoners",
-        },
-    ],
-    "atmospheric": [
-        {
-            "title": "Blade Runner 2049",
-            "description": "A young blade runner's discovery of a long-buried secret leads him to track down former blade runner Rick Deckard.",
-            "url": "https://tubitv.com/search/Blade%20Runner%202049",
-        },
-        {
-            "title": "Drive",
-            "description": "A mysterious Hollywood stuntman and mechanic moonlights as a getaway driver in a tense, neon-lit drama.",
-            "url": "https://tubitv.com/search/Drive",
-        },
-    ],
-}
-
 
 def _is_noisy_title(title: str) -> bool:
     low = (title or "").strip().lower()
@@ -242,14 +191,12 @@ class AdvancedTubiSemanticEngine:
             logger.warning("Tubi fetch failed for '%s': %s", search_terms, exc)
 
         if not scraped_candidates:
-            top_dim = max(intent_vector.items(), key=lambda kv: kv[1])[0]
-            for item in CURATED_FALLBACK_MOVIES.get(top_dim, CURATED_FALLBACK_MOVIES["atmospheric"]):
-                scraped_candidates.append({
-                    "title": item["title"],
-                    "description": item["description"],
-                    "url": item["url"],
-                    "source": "Curated Semantic Fallback",
-                })
+            return {
+                "original_query": query,
+                "search_terms": search_terms,
+                "cognitive_intent_vector": intent_vector,
+                "results": [],
+            }
 
         scored_results = []
         for cand in scraped_candidates:
