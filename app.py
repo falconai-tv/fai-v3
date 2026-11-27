@@ -183,12 +183,15 @@ def handle_music():
         return jsonify({"status": "error", "message": "Missing 'query'"}), 400
 
     try:
-        if hasattr(music_engine, "search"):
+        if hasattr(music_engine, "process"):
+            try:
+                res = music_engine.process(query)
+            except TypeError:
+                res = music_engine.process(query=query)
+        elif hasattr(music_engine, "search"):
             res = music_engine.search(query)
         elif hasattr(music_engine, "find"):
             res = music_engine.find(query)
-        elif hasattr(music_engine, "process"):
-            res = music_engine.process(query=query, intent=intent)
         else:
             return jsonify({"status": "error", "message": "No matching method on MusicEngine"}), 500
 
