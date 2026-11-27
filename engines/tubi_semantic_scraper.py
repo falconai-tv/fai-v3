@@ -8,6 +8,16 @@ from html.parser import HTMLParser
 
 logger = logging.getLogger("FalconAI.TubiSemanticEngine")
 
+NOISE_TITLE_PATTERNS = (
+    r"\bvs\.?\b",
+    r"\beagles\b",
+    r"\bcowboys\b",
+    r"\bnfl\b",
+    r"\bsuper bowl\b",
+    r"\bhighlights?\b",
+    r"\bepisode\s+\d+\b",
+)
+
 CURATED_FALLBACK_MOVIES = {
     "internal_tragedy": [
         {
@@ -58,6 +68,13 @@ CURATED_FALLBACK_MOVIES = {
         },
     ],
 }
+
+
+def _is_noisy_title(title: str) -> bool:
+    low = (title or "").strip().lower()
+    if not low or len(low) < 2:
+        return True
+    return any(re.search(pat, low) for pat in NOISE_TITLE_PATTERNS)
 
 
 class TubiJSONLDParser(HTMLParser):
@@ -153,7 +170,10 @@ class AdvancedTubiSemanticEngine:
                 terms.append(self.cognitive_weights[dim][0])
         if terms:
             return " ".join(terms)
-        words = [w for w in re.findall(r"\b[a-zA-Z]{4,}\b", query or "") if w.lower() not in {"film", "movie", "good", "watch", "something"}]
+        words = [
+            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", query or "")
+            if w.lower() not in {"film", "movie", "good", "watch", "something"}
+        ]
         return " ".join(words[:3]) or "drama thriller"
 
     def _iter_jsonld_items(self, block):
@@ -187,7 +207,7 @@ class AdvancedTubiSemanticEngine:
                 for block in parser.json_data:
                     for item in self._iter_jsonld_items(block):
                         title = html.unescape(str(item.get("name") or "")).strip()
-                        if not title:
+                        if _is_noisy_title(title):
                             continue
                         desc = html.unescape(str(item.get("description") or "")).strip()
                         url = str(item.get("url") or search_url).strip()
@@ -209,14 +229,15 @@ class AdvancedTubiSemanticEngine:
                             continue
                         clean_title = html.unescape(re.sub(r"<.*?>", " ", raw_title))
                         clean_title = re.sub(r"\s+", " ", clean_title).strip()
-                        if len(clean_title) >= 2:
-                            seen_urls.add(link)
-                            scraped_candidates.append({
-                                "title": clean_title,
-                                "description": f"Tubi movie match for {search_terms}",
-                                "url": f"https://tubitv.com{link}",
-                                "source": "Tubi TV DOM Scrape",
-                            })
+                        if _is_noisy_title(clean_title):
+                            continue
+                        seen_urls.add(link)
+                        scraped_candidates.append({
+                            "title": clean_title,
+                            "description": f"Tubi movie match for {search_terms}",
+                            "url": f"https://tubitv.com{link}",
+                            "source": "Tubi TV DOM Scrape",
+                        })
         except Exception as exc:
             logger.warning("Tubi fetch failed for '%s': %s", search_terms, exc)
 
@@ -248,6 +269,7 @@ class AdvancedTubiSemanticEngine:
                 "title": cand["title"],
                 "platform": "Tubi TV",
                 "url": cand["url"],
+                "description": cand.get("description", ""),
                 "source": cand["source"],
                 "match_score": round(score, 2),
                 "reasoning": f"Mapped via cognitive intent vector ({search_terms}).",
@@ -260,10 +282,3 @@ class AdvancedTubiSemanticEngine:
             "cognitive_intent_vector": intent_vector,
             "results": scored_results[:top_k],
         }
-
-
-if __name__ == "__main__":
-    engine = AdvancedTubiSemanticEngine()
-    q = "A film where the tragedy is internal, not physical — something that sits with you for days afterward"
-    res = engine.search_tubi_deep(q)
-    print(json.dumps(res, indent=4))
